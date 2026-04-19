@@ -1,4 +1,4 @@
-import type { Workout, WorkoutSegment } from './workouts'
+import type { Workout, WorkoutPrediction, WorkoutSegment } from './workouts'
 import { mortonPowerAtDuration, powerFromSplit, solveSplitForDistanceMorton, splitFromPower } from './pacing'
 
 /**
