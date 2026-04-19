@@ -119,9 +119,13 @@ export function WorkoutBuilder({ fit, name, segments, onChange, onSave, saveLabe
                 <span>Reps</span>
                 <input
                   type="number"
+                  inputMode="numeric"
                   min="1"
-                  value={seg.count}
-                  onChange={(e) => setSeg(i, { count: Number(e.target.value) })}
+                  value={isFinite(seg.count) ? seg.count : ''}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setSeg(i, { count: v === '' ? NaN : Number(v) })
+                  }}
                 />
               </label>
               <label className="seg-work">

@@ -293,7 +293,6 @@ function App() {
                 value={twoKInput}
                 onChange={(e) => onTwoKChange(e.target.value)}
                 placeholder="m:ss"
-                inputMode="decimal"
               />
             </label>
             <label className="field">
@@ -303,7 +302,6 @@ function App() {
                 value={splitInput}
                 onChange={(e) => onSplitChange(e.target.value)}
                 placeholder="m:ss.t"
-                inputMode="decimal"
               />
             </label>
           </div>
@@ -404,7 +402,6 @@ function App() {
                         value={sixKInput}
                         onChange={(e) => onSixKChange(e.target.value)}
                         placeholder="e.g. 22:30"
-                        inputMode="decimal"
                       />
                     </label>
                     <label className="field">
@@ -414,7 +411,6 @@ function App() {
                         value={sixKSplitInput}
                         onChange={(e) => onSixKSplitChange(e.target.value)}
                         placeholder="m:ss.t"
-                        inputMode="decimal"
                       />
                     </label>
                   </div>
