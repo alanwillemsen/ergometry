@@ -82,10 +82,17 @@ Any static host. `npm run build` → `dist/` → drop into Cloudflare Pages, Git
 Pure `CP + W'/t` overstates sustainable power beyond ~20 min. A phase-local log decay corrects it:
 
 ```
-CP_eff(t_phase) = CP · (1 − 0.04 · log10(t_phase / 1200))   for t_phase > 1200s
+CP_eff(t_phase) = CP · (1 − k · log10(t_phase / 1200))   for t_phase > 1200s
+k = 0.16 · (1 − CP/P_2K)                                 (0.04 WC, 0.048 Comp, 0.061 Rec)
 ```
 
 The decay is reset on any rest phase, so intervals are unchanged; it only bites long continuous efforts (30′, 60′, 10K+). Calibrated so world-class 60′ lands near Jensen's empirical 76% of P₂K (vs ~80% without the correction).
+
+Scaling `k` with `(1 − CP/P_2K)` means less-aerobic tiers fade more on long pieces. The effect is small in absolute terms — even for Recreational, the decay adds under a second per 500m at 60 min:
+
+![Additional seconds per 500m from the long-duration decay, across tiers (7:00 2K)](docs/decay.svg)
+
+Regenerate with `npx tsx scripts/plot-decay.mjs` after any change to `DECAY_COEFF` or `DECAY_ONSET_S`.
 
 ## Known limits
 
