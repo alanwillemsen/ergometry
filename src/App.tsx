@@ -9,13 +9,13 @@ import {
   emptySegment,
   type EditableSegment,
 } from './components/WorkoutBuilder'
-import { loadState, saveState, type SavedWorkout } from './lib/storage'
+import { loadState, saveState, type PersistedState, type SavedWorkout } from './lib/storage'
 import { buildShareUrl, buildWorkoutShareUrl, readHashState, readHashWorkout } from './lib/urlState'
 
 const ALL_TIERS: Tier[] = ['world-class', 'competitive', 'recreational', 'custom']
 
 type CustomMode = 'slider' | 'scores'
-type Tab = 'profile' | 'library' | 'build'
+type Tab = 'profile' | 'workouts' | 'build'
 
 const DEFAULTS = {
   twoKInput: '7:00',
@@ -30,6 +30,21 @@ const DEFAULTS = {
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2)
+}
+
+// True for first-time / incognito visitors — also true after the default-only
+// state has been auto-persisted on mount, so refreshes don't promote a user
+// who never touched anything to the Workouts tab.
+function isFirstTimeLike(stored: Partial<PersistedState> | null): boolean {
+  if (!stored) return true
+  const customized =
+    (stored.twoKInput !== undefined && stored.twoKInput !== DEFAULTS.twoKInput) ||
+    (stored.tier !== undefined && stored.tier !== DEFAULTS.tier) ||
+    (stored.customMode !== undefined && stored.customMode !== DEFAULTS.customMode) ||
+    (stored.customRatio !== undefined && stored.customRatio !== DEFAULTS.customRatio) ||
+    (stored.sixKInput !== undefined && stored.sixKInput !== DEFAULTS.sixKInput) ||
+    (Array.isArray(stored.savedWorkouts) && stored.savedWorkouts.length > 0)
+  return !customized
 }
 
 async function copyToClipboard(text: string): Promise<boolean> {
@@ -88,7 +103,7 @@ function App() {
     return isFinite(t) && t > 0 ? formatSplit(t / 12) : ''
   })
 
-  // Library state
+  // Workouts state
   const [savedWorkouts, setSavedWorkouts] = useState<SavedWorkout[]>(init.savedWorkouts)
   const [shareStatuses, setShareStatuses] = useState<Record<string, 'copied' | 'error'>>({})
 
@@ -98,17 +113,15 @@ function App() {
   const [editingId, setEditingId] = useState<string | null>(null)
 
   // UI state
-  const [activeTab, setActiveTab] = useState<Tab>(() => {
-    const stored = loadState()
-    if (!stored) return 'profile'
-    const t = parseTime((stored.twoKInput as string) ?? '')
-    return isFinite(t) && t > 0 ? 'library' : 'profile'
-  })
+  const [activeTab, setActiveTab] = useState<Tab>(() =>
+    isFirstTimeLike(loadState()) ? 'profile' : 'workouts',
+  )
   const [profileShareStatus, setProfileShareStatus] = useState<'' | 'copied' | 'error'>('')
   const [sharedWorkout, setSharedWorkout] = useState<{ name: string; segments: EditableSegment[] } | null>(() => {
     const w = readHashWorkout()
     return w ? { name: w.name, segments: w.segments as EditableSegment[] } : null
   })
+  const [helpOpen, setHelpOpen] = useState(() => isFirstTimeLike(loadState()))
 
   // Clear workout hash from URL on load (profile hashes are cleared on share)
   useEffect(() => {
@@ -124,7 +137,7 @@ function App() {
         setEditingId(null)
         setBuilderName(DEFAULTS.builderName)
         setBuilderSegments(DEFAULTS.builderSegments)
-        setActiveTab('library')
+        setActiveTab('workouts')
       }
     }
     window.addEventListener('popstate', onPop)
@@ -189,7 +202,7 @@ function App() {
     setTimeout(() => setProfileShareStatus(''), 2000)
   }
 
-  // Library actions
+  // Workout list actions
   const handleEditWorkout = (id: string) => {
     const w = savedWorkouts.find((sw) => sw.id === id)
     if (!w) return
@@ -252,7 +265,7 @@ function App() {
     setEditingId(null)
     setBuilderName(DEFAULTS.builderName)
     setBuilderSegments(DEFAULTS.builderSegments)
-    setActiveTab('library')
+    setActiveTab('workouts')
   }
 
   const handleNewWorkout = () => {
@@ -266,7 +279,7 @@ function App() {
     if (!sharedWorkout) return
     setSavedWorkouts((prev) => [{ id: generateId(), name: sharedWorkout.name, segments: sharedWorkout.segments }, ...prev])
     setSharedWorkout(null)
-    setActiveTab('library')
+    setActiveTab('workouts')
   }
 
   return (
@@ -276,6 +289,28 @@ function App() {
         <p>Predict splits for any erg workout.</p>
       </header>
 
+      <details
+        className="how-it-works"
+        open={helpOpen}
+        onToggle={(e) => setHelpOpen((e.currentTarget as HTMLDetailsElement).open)}
+      >
+        <summary>How it works</summary>
+        <ol>
+          <li>
+            <strong>Profile</strong> — enter your 2K and pick a tier (or customize from a 6K).
+          </li>
+          <li>
+            <strong>Workouts</strong> — see predicted splits for preset and saved workouts.
+          </li>
+          <li>
+            <strong>Create</strong> — build your own workouts; target splits update as you type.
+          </li>
+        </ol>
+        <p className="hint">
+          Predictions use a critical-power model tuned from your profile. Your data stays in this browser.
+        </p>
+      </details>
+
       {sharedWorkout && (
         <div className="shared-banner">
           <span>
@@ -283,7 +318,7 @@ function App() {
           </span>
           <div className="shared-banner-actions">
             <button className="shared-save-btn" onClick={handleSaveSharedWorkout}>
-              Save to library
+              Save workout
             </button>
             <button className="shared-dismiss-btn" onClick={() => setSharedWorkout(null)}>
               Dismiss
@@ -303,11 +338,11 @@ function App() {
         </button>
         <button
           role="tab"
-          aria-selected={activeTab === 'library'}
-          className={`tab-btn${activeTab === 'library' ? ' active' : ''}`}
-          onClick={() => setActiveTab('library')}
+          aria-selected={activeTab === 'workouts'}
+          className={`tab-btn${activeTab === 'workouts' ? ' active' : ''}`}
+          onClick={() => setActiveTab('workouts')}
         >
-          Library
+          Workouts
         </button>
         <button
           role="tab"
@@ -315,13 +350,16 @@ function App() {
           className={`tab-btn${activeTab === 'build' ? ' active' : ''}`}
           onClick={() => setActiveTab('build')}
         >
-          Build
+          Create
         </button>
       </nav>
 
       {activeTab === 'profile' && (
         <section className="panel">
           <h2>Your profile</h2>
+          <p className="panel-intro">
+            Your 2K and tier anchor every prediction on the other tabs. The tier sets how much your pace fades on longer pieces — pick <em>Custom</em> to dial it in yourself or from an actual 6K.
+          </p>
           <div className="twok-inputs">
             <label className="field">
               <span>2K time</span>
@@ -473,9 +511,12 @@ function App() {
         </section>
       )}
 
-      {activeTab === 'library' && (
+      {activeTab === 'workouts' && (
         <section className="panel">
           <h2>Predicted splits</h2>
+          <p className="panel-intro">
+            Target splits for preset workouts and anything you've saved. Add your own on the <em>Create</em> tab.
+          </p>
           <WorkoutList
             fit={fit}
             savedWorkouts={savedWorkouts}
@@ -492,13 +533,16 @@ function App() {
       {activeTab === 'build' && (
         <section className="panel">
           <div className="build-header">
-            <h2>{editingId ? 'Edit workout' : 'Build your own'}</h2>
+            <h2>{editingId ? 'Edit workout' : 'Create a workout'}</h2>
             {editingId && (
               <button className="link-button" type="button" onClick={handleNewWorkout}>
                 + New workout
               </button>
             )}
           </div>
+          <p className="panel-intro">
+            Combine intervals (work + optional rest) into a workout. Target splits appear next to each segment as you type, then save it to the <em>Workouts</em> tab.
+          </p>
           <WorkoutBuilder
             fit={fit}
             name={builderName}
@@ -508,7 +552,7 @@ function App() {
               if (patch.segments !== undefined) setBuilderSegments(patch.segments)
             }}
             onSave={handleBuilderSave}
-            saveLabel={editingId ? 'Update workout' : 'Save to library'}
+            saveLabel={editingId ? 'Update workout' : 'Save workout'}
           />
         </section>
       )}

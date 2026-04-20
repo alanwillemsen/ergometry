@@ -104,7 +104,7 @@ export function WorkoutList({
     <div className="workout-list">
       {savedWorkouts.length > 0 && (
         <section className="preset-group">
-          <h3 className="group-label">My workouts</h3>
+          <h3 className="group-label">Yours</h3>
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <SortableContext items={savedWorkouts.map((sw) => sw.id)} strategy={verticalListSortingStrategy}>
               <div className="card-grid">

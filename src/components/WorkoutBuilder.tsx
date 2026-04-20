@@ -62,7 +62,7 @@ export interface WorkoutBuilderProps {
   saveLabel?: string
 }
 
-export function WorkoutBuilder({ fit, name, segments, onChange, onSave, saveLabel = 'Save to library' }: WorkoutBuilderProps) {
+export function WorkoutBuilder({ fit, name, segments, onChange, onSave, saveLabel = 'Save workout' }: WorkoutBuilderProps) {
   const workout = useMemo(() => buildWorkoutFromSegments(name, segments), [name, segments])
   const buildError = useMemo(() => {
     if (workout) return null
