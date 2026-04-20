@@ -117,6 +117,20 @@ function App() {
     }
   }, [])
 
+  // Treat browser back as "exit edit" when a workout is being edited.
+  useEffect(() => {
+    const onPop = () => {
+      if (activeTab === 'build' && editingId !== null) {
+        setEditingId(null)
+        setBuilderName(DEFAULTS.builderName)
+        setBuilderSegments(DEFAULTS.builderSegments)
+        setActiveTab('library')
+      }
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [activeTab, editingId])
+
   // Persist state
   useEffect(() => {
     saveState({ twoKInput, tier, customMode, customRatio, sixKInput, savedWorkouts, builderName, builderSegments })
@@ -183,6 +197,7 @@ function App() {
     setBuilderSegments(w.segments as EditableSegment[])
     setEditingId(id)
     setActiveTab('build')
+    history.pushState({ ergView: 'edit' }, '')
   }
 
   const handleDeleteWorkout = (id: string) => {
@@ -193,6 +208,28 @@ function App() {
       setBuilderName(DEFAULTS.builderName)
       setBuilderSegments(DEFAULTS.builderSegments)
     }
+  }
+
+  const handleMoveWorkoutToEdge = (id: string, edge: 'top' | 'bottom') => {
+    setSavedWorkouts((prev) => {
+      const idx = prev.findIndex((w) => w.id === id)
+      if (idx < 0) return prev
+      const item = prev[idx]
+      const without = prev.filter((_, i) => i !== idx)
+      return edge === 'top' ? [item, ...without] : [...without, item]
+    })
+  }
+
+  const handleReorderWorkouts = (activeId: string, overId: string) => {
+    setSavedWorkouts((prev) => {
+      const from = prev.findIndex((w) => w.id === activeId)
+      const to = prev.findIndex((w) => w.id === overId)
+      if (from < 0 || to < 0 || from === to) return prev
+      const next = prev.slice()
+      const [moved] = next.splice(from, 1)
+      next.splice(to, 0, moved)
+      return next
+    })
   }
 
   const handleShareWorkout = async (id: string) => {
@@ -210,7 +247,7 @@ function App() {
     if (editingId) {
       setSavedWorkouts((prev) => prev.map((w) => w.id === editingId ? { ...w, name, segments } : w))
     } else {
-      setSavedWorkouts((prev) => [...prev, { id: generateId(), name, segments }])
+      setSavedWorkouts((prev) => [{ id: generateId(), name, segments }, ...prev])
     }
     setEditingId(null)
     setBuilderName(DEFAULTS.builderName)
@@ -227,7 +264,7 @@ function App() {
   // Shared workout received via link
   const handleSaveSharedWorkout = () => {
     if (!sharedWorkout) return
-    setSavedWorkouts((prev) => [...prev, { id: generateId(), name: sharedWorkout.name, segments: sharedWorkout.segments }])
+    setSavedWorkouts((prev) => [{ id: generateId(), name: sharedWorkout.name, segments: sharedWorkout.segments }, ...prev])
     setSharedWorkout(null)
     setActiveTab('library')
   }
@@ -446,6 +483,8 @@ function App() {
             onEditWorkout={handleEditWorkout}
             onDeleteWorkout={handleDeleteWorkout}
             onShareWorkout={handleShareWorkout}
+            onReorderWorkouts={handleReorderWorkouts}
+            onMoveWorkoutToEdge={handleMoveWorkoutToEdge}
           />
         </section>
       )}

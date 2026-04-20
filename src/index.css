@@ -415,9 +415,77 @@ code {
 .workout-card header {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
   gap: 4px;
 }
+.workout-card.is-dragging {
+  opacity: 0.6;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  cursor: grabbing;
+}
+.drag-handle {
+  background: none;
+  border: 0;
+  color: var(--text);
+  cursor: grab;
+  padding: 2px 4px 2px 0;
+  font-size: 16px;
+  line-height: 1;
+  touch-action: none;
+}
+.drag-handle:focus-visible { outline: 2px solid var(--accent-border); border-radius: 3px; }
+.drag-handle:active { cursor: grabbing; }
+.workout-card header h3 { flex: 1; min-width: 0; }
+.card-status {
+  font-size: 11px;
+  color: var(--text);
+  font-style: italic;
+  margin-top: -2px;
+}
+.card-menu {
+  position: relative;
+  flex-shrink: 0;
+}
+.menu-trigger {
+  background: none;
+  border: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: var(--sans);
+}
+.menu-trigger:hover { background: var(--accent-bg); }
+.menu-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  min-width: 140px;
+  z-index: 20;
+}
+.menu-list li { margin: 0; }
+.menu-list button {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 8px 14px;
+  font: 13px var(--sans);
+  color: var(--text-h);
+  cursor: pointer;
+}
+.menu-list button:hover { background: var(--accent-bg); }
+.menu-list button.danger { color: var(--error); }
+.menu-list button:disabled { opacity: 0.4; cursor: default; }
 .workout-card h3 {
   margin: 0;
   font-size: 13px;
@@ -454,13 +522,6 @@ code {
 }
 .link-button:hover { text-decoration: underline; }
 .link-button-danger { color: var(--error); }
-
-/* Card action buttons (share / edit / delete) */
-.card-actions {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
-}
 
 /* Save workout button in builder summary */
 .save-workout-btn {
