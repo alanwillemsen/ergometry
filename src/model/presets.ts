@@ -60,12 +60,10 @@ export const PRESET_GROUPS: PresetGroup[] = [
     ],
   },
   {
-    label: 'UT1 / steady-state',
+    label: 'Steady-state',
     workouts: [
-      interval('4x20-2-ut1', "4 × 20′ UT1 @ 2′ rest", 4, { duration: 1200 }, { duration: 120 }, 'UT1'),
-      interval('3x30-5-ut1', "3 × 30′ UT1 @ 5′ rest", 3, { duration: 1800 }, { duration: 300 }, 'UT1'),
-      interval('2x40-5-ut1', "2 × 40′ UT1 @ 5′ rest", 2, { duration: 2400 }, { duration: 300 }, 'UT1'),
-      interval('2x45-5-ut1', "2 × 45′ UT1 @ 5′ rest", 2, { duration: 2700 }, { duration: 300 }, 'UT1'),
+      interval('60min-ut1', "60′ UT1", 1, { duration: 3600 }, {}, 'UT1'),
+      interval('3x30-3-ut2', "3 × 30′ UT2 @ 3′ rest", 3, { duration: 1800 }, { duration: 180 }, 'UT2'),
     ],
   },
   {
