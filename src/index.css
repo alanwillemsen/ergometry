@@ -936,6 +936,12 @@ code {
   color: var(--accent);
   display: flex;
   flex-direction: column;
+  gap: 6px;
+}
+.seg-target-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 .seg-split-hi {
@@ -1071,12 +1077,7 @@ code {
   color: var(--error);
   font-size: 12px;
 }
-.seg-battery {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  align-items: center;
-}
+.seg-battery { display: contents; }
 .battery-indicator {
   display: inline-flex;
   align-items: center;

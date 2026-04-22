@@ -584,12 +584,12 @@ function SortableIntervalCard({
         const bandSuffix = banded ? ` @ ${iv.band}` : ''
         return (
           <div className="seg-target">
-            <div>
-            target <span className="seg-split-hi">{formatSplit(split)}<span className="seg-split-unit">/500m</span></span>
-            {bandSuffix} · {repDetail}
-          </div>
-            {pct != null && (
-              <div className="seg-battery">
+            <div className="seg-target-row">
+              <div>
+                target <span className="seg-split-hi">{formatSplit(split)}<span className="seg-split-unit">/500m</span></span>
+                {bandSuffix} · {repDetail}
+              </div>
+              {pct != null && (
                 <BatteryButton
                   pct={pct}
                   locked={locked}
@@ -599,8 +599,8 @@ function SortableIntervalCard({
                     readOnly || banded ? undefined : () => setOpenLockIdx(openLockIdx === i ? null : i)
                   }
                 />
-              </div>
-            )}
+              )}
+            </div>
             {!readOnly && !banded && openLockIdx === i && workout && fit && (
               <BatteryLockPanel
                 workout={workout}
