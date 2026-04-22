@@ -122,6 +122,27 @@ export interface WorkoutBuilderProps {
 
 export function WorkoutBuilder({ fit, name, intervals, onChange, readOnly = false }: WorkoutBuilderProps) {
   const [openLockIdx, setOpenLockIdx] = useState<number | null>(null)
+  const [selectMode, setSelectMode] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+
+  const enterSelectMode = () => setSelectMode(true)
+  const exitSelectMode = () => { setSelectMode(false); setSelected(new Set()) }
+  const toggleSelect = (id: string) =>
+    setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
+
+  const copySelected = () => {
+    if (selected.size === 0) return
+    const entries = intervals
+      .map((iv, i) => ({ iv, i, id: iv.id ?? `idx-${i}` }))
+      .filter(({ id }) => selected.has(id))
+    if (entries.length === 0) return
+    const lastIdx = entries[entries.length - 1].i
+    const copies = entries.map(({ iv }) => ({ ...iv, id: newIntervalId() }))
+    const next = intervals.slice()
+    next.splice(lastIdx + 1, 0, ...copies)
+    onChange({ intervals: next })
+    exitSelectMode()
+  }
   const workout = useMemo(() => buildWorkoutFromIntervals(name, intervals), [name, intervals])
   const buildError = useMemo(() => {
     if (workout) return null
@@ -242,33 +263,63 @@ export function WorkoutBuilder({ fit, name, intervals, onChange, readOnly = fals
 
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
-          {intervals.map((iv, i) => (
-            <SortableIntervalCard
-              key={iv.id ?? `idx-${i}`}
-              id={iv.id ?? `idx-${i}`}
-              iv={iv}
-              idx={i}
-              readOnly={readOnly}
-              canRemove={intervals.length > 1}
-              setInt={setInt}
-              setBand={setBand}
-              setLock={setLock}
-              onDuplicate={() => duplicateInt(i)}
-              onRemove={() => removeInt(i)}
-              prediction={prediction}
-              workout={workout}
-              fit={fit}
-              openLockIdx={openLockIdx}
-              setOpenLockIdx={setOpenLockIdx}
-            />
-          ))}
+          {intervals.map((iv, i) => {
+            const id = iv.id ?? `idx-${i}`
+            return (
+              <SortableIntervalCard
+                key={id}
+                id={id}
+                iv={iv}
+                idx={i}
+                readOnly={readOnly}
+                canRemove={intervals.length > 1}
+                selectMode={selectMode}
+                isSelected={selected.has(id)}
+                onToggleSelect={() => toggleSelect(id)}
+                setInt={setInt}
+                setBand={setBand}
+                setLock={setLock}
+                onDuplicate={() => duplicateInt(i)}
+                onRemove={() => removeInt(i)}
+                prediction={prediction}
+                workout={workout}
+                fit={fit}
+                openLockIdx={openLockIdx}
+                setOpenLockIdx={setOpenLockIdx}
+              />
+            )
+          })}
         </SortableContext>
       </DndContext>
 
-      {!readOnly && (
-        <button className="add-seg" type="button" onClick={addInt}>
-          + Add interval
-        </button>
+      {!readOnly && !selectMode && (
+        <div className="seg-controls">
+          <button className="add-seg" type="button" onClick={addInt}>
+            + Add interval
+          </button>
+          {intervals.length >= 2 && (
+            <button className="select-btn" type="button" onClick={enterSelectMode}>
+              Select
+            </button>
+          )}
+        </div>
+      )}
+      {!readOnly && selectMode && (
+        <div className="seg-controls">
+          <button
+            className="copy-selected-btn"
+            type="button"
+            onClick={copySelected}
+            disabled={selected.size === 0}
+          >
+            {selected.size === 0
+              ? 'Select intervals above'
+              : `Duplicate ${selected.size} interval${selected.size > 1 ? 's' : ''}`}
+          </button>
+          <button className="cancel-select-btn" type="button" onClick={exitSelectMode}>
+            Cancel
+          </button>
+        </div>
       )}
 
       {!workout && <p className="error">{buildError}</p>}
@@ -295,6 +346,9 @@ interface SortableIntervalCardProps {
   idx: number
   readOnly: boolean
   canRemove: boolean
+  selectMode: boolean
+  isSelected: boolean
+  onToggleSelect: () => void
   setInt: (i: number, patch: Partial<EditableInterval>) => void
   setBand: (i: number, band: Band | undefined) => void
   setLock: (i: number, pct: number | undefined) => void
@@ -313,6 +367,9 @@ function SortableIntervalCard({
   idx: i,
   readOnly,
   canRemove,
+  selectMode,
+  isSelected,
+  onToggleSelect,
   setInt,
   setBand,
   setLock,
@@ -326,7 +383,7 @@ function SortableIntervalCard({
 }: SortableIntervalCardProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id,
-    disabled: readOnly,
+    disabled: readOnly || selectMode,
   })
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -338,20 +395,32 @@ function SortableIntervalCard({
     <div
       ref={setNodeRef}
       style={style}
-      className={`builder-seg${isDragging ? ' is-dragging' : ''}`}
+      className={`builder-seg${isDragging ? ' is-dragging' : ''}${isSelected ? ' is-selected' : ''}`}
     >
       {!readOnly && (
         <div className="seg-toolbar">
-          <button
-            type="button"
-            className="drag-handle"
-            aria-label="Reorder interval"
-            title="Drag to reorder"
-            {...attributes}
-            {...listeners}
-          >
-            ⠿
-          </button>
+          <div className="seg-toolbar-left">
+            {selectMode && (
+              <input
+                type="checkbox"
+                className="seg-checkbox"
+                checked={isSelected}
+                onChange={onToggleSelect}
+                aria-label={`Select interval ${i + 1}`}
+              />
+            )}
+            <span className="seg-index">{i + 1}</span>
+            <button
+              type="button"
+              className="drag-handle"
+              aria-label="Reorder interval"
+              title="Drag to reorder"
+              {...attributes}
+              {...listeners}
+            >
+              ⠿
+            </button>
+          </div>
           <div className="seg-actions">
             <button
               type="button"
