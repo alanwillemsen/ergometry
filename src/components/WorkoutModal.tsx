@@ -55,13 +55,19 @@ export function WorkoutModal({
   // - ×/backdrop/Escape/Save/Delete: call onClose() directly; cleanup pops
   //   the history entry we pushed.
   useEffect(() => {
-    history.pushState({ modal: true }, '')
-    const handlePop = () => onCloseRef.current()
+    // Unique key so the listener ignores stale entries from StrictMode's
+    // double-invocation: cleanup calls history.back(), which pops to the
+    // key1 entry, not to a non-modal state, so the remounted listener skips it.
+    const key = `m${Date.now()}`
+    history.pushState({ modalKey: key }, '')
+    const handlePop = (e: PopStateEvent) => {
+      // Only close when we've navigated back to a non-modal state.
+      if (!e.state?.modalKey) onCloseRef.current()
+    }
     window.addEventListener('popstate', handlePop)
     return () => {
       window.removeEventListener('popstate', handlePop)
-      // If closed programmatically (not via back), clean up the pushed entry.
-      if (history.state?.modal) history.back()
+      if (history.state?.modalKey === key) history.back()
     }
   }, [])
 
