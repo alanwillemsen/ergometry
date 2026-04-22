@@ -1,19 +1,24 @@
 import { describe, it, expect } from 'vitest'
-import { simulateWorkout, predictWorkout } from './wprime'
-import type { Workout } from './workouts'
-import { powerFromSplit } from './pacing'
+import { simulateWorkout, predictWorkout, computeIntervalBounds } from './wprime'
+import type { Workout, WorkoutInterval } from './workouts'
+import { bandPower, fitProfile, powerFromSplit } from './pacing'
 
 const CP = 300
 const WP = 20_000
 
-function w(name: string, segments: Workout['segments']): Workout {
-  return { id: name, name, segments }
+function w(name: string, intervals: Workout['intervals']): Workout {
+  return { id: name, name, intervals }
+}
+
+// Helper: expand a count-based interval spec into N individual intervals.
+function rep(n: number, interval: WorkoutInterval): WorkoutInterval[] {
+  return Array.from({ length: n }, () => ({ ...interval }))
 }
 
 describe('simulateWorkout', () => {
   it('P = CP with no rest drains nothing (starts at W\u2032_max)', () => {
     const workout = w('10min at CP', [
-      { work: { kind: 'duration', seconds: 600 }, rest: { kind: 'none' }, count: 1 },
+      { work: { kind: 'duration', seconds: 600 }, rest: { kind: 'none' } },
     ])
     const sim = simulateWorkout(workout, CP, CP, WP)
     expect(sim.finalWbal).toBeCloseTo(WP, 2)
@@ -24,25 +29,21 @@ describe('simulateWorkout', () => {
     const P = 400
     const expectedExhaustion = WP / (P - CP) // 200s
     const workout = w('all-out', [
-      { work: { kind: 'duration', seconds: expectedExhaustion }, rest: { kind: 'none' }, count: 1 },
+      { work: { kind: 'duration', seconds: expectedExhaustion }, rest: { kind: 'none' } },
     ])
     const sim = simulateWorkout(workout, P, CP, WP)
     expect(sim.finalWbal).toBeCloseTo(0, 1)
   })
 
   it('recovery at P=0 for τ seconds recovers ~63% of gap', () => {
-    // Deplete half of W' first, then rest at P=0 for τ(CP-0) = 546·exp(-0.01·CP)+316
-    // Starting state: wbal = WP/2 (gap = WP/2). After τ seconds of exp recovery,
-    // remaining gap = gap * e^-1 ≈ 36.8% → recovered ≈ 63.2% of gap.
     const P_burn = 400
     const burnTime = WP / 2 / (P_burn - CP) // 100s
     const tau = 546 * Math.exp(-0.01 * CP) + 316
     const workout = w('burn+rest', [
-      { work: { kind: 'duration', seconds: burnTime }, rest: { kind: 'duration', seconds: tau }, count: 1 },
-      { work: { kind: 'duration', seconds: 0.001 }, rest: { kind: 'none' }, count: 1 }, // dummy tail
+      { work: { kind: 'duration', seconds: burnTime }, rest: { kind: 'duration', seconds: tau } },
+      { work: { kind: 'duration', seconds: 0.001 }, rest: { kind: 'none' } }, // dummy tail
     ])
     const sim = simulateWorkout(workout, P_burn, CP, WP, 0)
-    // After burn: wbal ≈ WP/2. After τ at P=0: wbal ≈ WP - (WP/2)·e^-1
     const expected = WP - (WP / 2) * Math.exp(-1)
     expect(sim.finalWbal).toBeCloseTo(expected, 0)
   })
@@ -50,15 +51,12 @@ describe('simulateWorkout', () => {
 
 describe('predictWorkout', () => {
   it('2K all-out (W=2000m, no rest) predicts a pace near the defining 2K', () => {
-    // If CP + W'/420 = P, a 2K should land right around a 7-min piece when using
-    // those parameters. Construct from split=105 (7:00 2K).
     const p2k = powerFromSplit(105)
     const cp = 0.88 * p2k
     const wp = (p2k - cp) * 420
     const workout = w('2K', [
-      { work: { kind: 'distance', meters: 2000 }, rest: { kind: 'none' }, count: 1 },
+      { work: { kind: 'distance', meters: 2000 }, rest: { kind: 'none' } },
     ])
-    // safetyJoules=0: test the exact "just exhausts" pace.
     const pred = predictWorkout(workout, cp, wp, undefined, 0)
     expect(pred.avgSplitSeconds).toBeCloseTo(105, 1)
     expect(pred.totalWorkSeconds).toBeCloseTo(420, 0)
@@ -68,14 +66,15 @@ describe('predictWorkout', () => {
     const cp = 280
     const wp = 20_000
     const single = predictWorkout(
-      w('2K', [{ work: { kind: 'distance', meters: 2000 }, rest: { kind: 'none' }, count: 1 }]),
+      w('2K', [{ work: { kind: 'distance', meters: 2000 }, rest: { kind: 'none' } }]),
       cp,
       wp,
     )
     const four = predictWorkout(
-      w('4x2K', [
-        { work: { kind: 'distance', meters: 2000 }, rest: { kind: 'duration', seconds: 300 }, count: 4 },
-      ]),
+      w(
+        '4x2K',
+        rep(4, { work: { kind: 'distance', meters: 2000 }, rest: { kind: 'duration', seconds: 300 } }),
+      ),
       cp,
       wp,
     )
@@ -86,9 +85,10 @@ describe('predictWorkout', () => {
     const cp = 280
     const wp = 20_000
     const mkInt = (restSec: number) =>
-      w('4x1K', [
-        { work: { kind: 'distance', meters: 1000 }, rest: { kind: 'duration', seconds: restSec }, count: 4 },
-      ])
+      w(
+        '4x1K',
+        rep(4, { work: { kind: 'distance', meters: 1000 }, rest: { kind: 'duration', seconds: restSec } }),
+      )
     const short = predictWorkout(mkInt(60), cp, wp)
     const long = predictWorkout(mkInt(300), cp, wp)
     expect(long.avgSplitSeconds).toBeLessThan(short.avgSplitSeconds)
@@ -98,25 +98,24 @@ describe('predictWorkout', () => {
     const cp = 280
     const wp = 20_000
     const mkInt = (count: number) =>
-      w(`${count}x1K`, [
-        { work: { kind: 'distance', meters: 1000 }, rest: { kind: 'duration', seconds: 180 }, count },
-      ])
+      w(
+        `${count}x1K`,
+        rep(count, { work: { kind: 'distance', meters: 1000 }, rest: { kind: 'duration', seconds: 180 } }),
+      )
     const two = predictWorkout(mkInt(2), cp, wp)
     const six = predictWorkout(mkInt(6), cp, wp)
     expect(six.avgSplitSeconds).toBeGreaterThan(two.avgSplitSeconds)
   })
 
   it('20x 1\u2032/1\u2032 lands within a couple seconds of 2K pace', () => {
-    // 20x 1'/1' is close to 2K pace for a competitive rower — the reference xlsx
-    // uses a 0.985 factor (~1.6s/500m faster). Our model should land in a similar
-    // neighborhood (±3s of 2K split).
     const p2k = powerFromSplit(108) // 7:12 2K
     const cp = 0.88 * p2k
     const wp = (p2k - cp) * 432
     const pred = predictWorkout(
-      w('20x1\u2032/1\u2032', [
-        { work: { kind: 'duration', seconds: 60 }, rest: { kind: 'duration', seconds: 60 }, count: 20 },
-      ]),
+      w(
+        '20x1\u2032/1\u2032',
+        rep(20, { work: { kind: 'duration', seconds: 60 }, rest: { kind: 'duration', seconds: 60 } }),
+      ),
       cp,
       wp,
     )
@@ -124,14 +123,12 @@ describe('predictWorkout', () => {
   })
 
   it('long-duration decay shifts 60\u2032 toward Jensen\u2019s 76% P_2K for world-class', () => {
-    // Calibration target: world-class (ratio 0.75, k=0.04) 60' lands near 76%
-    // of P_2K with the decay applied. Pure CP+W'/t predicts ~80% without it.
     const p2k = powerFromSplit(86.25) // 5:45 2K
     const cp = 0.75 * p2k
     const wp = (p2k - cp) * 345
     const pred = predictWorkout(
       w('60\u2032', [
-        { work: { kind: 'duration', seconds: 3600 }, rest: { kind: 'none' }, count: 1 },
+        { work: { kind: 'duration', seconds: 3600 }, rest: { kind: 'none' } },
       ]),
       cp,
       wp,
@@ -145,14 +142,13 @@ describe('predictWorkout', () => {
     expect(ratio60).toBeLessThan(0.78)
   })
   it('decay scales with aerobic fraction: lower CP ratio \u2192 larger 60\u2032 fade', () => {
-    // Less-aerobic athletes (lower CP/P_2K ratio) should fade *more* at 60'.
     const p2k = powerFromSplit(105) // 7:00 2K
     const mk = (ratio: number, k: number) => {
       const cp = ratio * p2k
       const wp = (p2k - cp) * 420
       return predictWorkout(
         w('60\u2032', [
-          { work: { kind: 'duration', seconds: 3600 }, rest: { kind: 'none' }, count: 1 },
+          { work: { kind: 'duration', seconds: 3600 }, rest: { kind: 'none' } },
         ]),
         cp,
         wp,
@@ -164,24 +160,19 @@ describe('predictWorkout', () => {
     const worldClass = mk(0.75, 0.04)
     const recreational = mk(0.62, 0.061)
     const wcFade = 1 - powerFromSplit(worldClass.avgSplitSeconds) / (0.75 * p2k * (420 / 420 + 0))
-    // Simpler: recreational's 60' split vs its own CP is a bigger gap
     const recFade = recreational.avgSplitSeconds - 105
     const wcFade2 = worldClass.avgSplitSeconds - 105
     expect(recFade).toBeGreaterThan(wcFade2)
-    // touch the unused calc so the linter stays happy
     expect(wcFade).toBeGreaterThan(-1)
   })
   it('decay does not affect sub-20-min workouts', () => {
-    // A 6K (~18 min) should land identically to the pre-decay prediction
-    // because phase elapsed never crosses DECAY_ONSET_S.
     const cp = 280
     const wp = 20_000
     const pred = predictWorkout(
-      w('6K', [{ work: { kind: 'distance', meters: 6000 }, rest: { kind: 'none' }, count: 1 }]),
+      w('6K', [{ work: { kind: 'distance', meters: 6000 }, rest: { kind: 'none' } }]),
       cp,
       wp,
     )
-    // Closed-form cubic: CP*s^3 + (500W'/D)*s^2 - K = 0
     let x = 110
     const K = 350_000_000
     for (let i = 0; i < 60; i++) {
@@ -192,36 +183,36 @@ describe('predictWorkout', () => {
     expect(pred.avgSplitSeconds).toBeCloseTo(x, 1)
   })
   it('decay resets per work phase — 4x10\u2032 unaffected', () => {
-    // Each 10' rep is well under DECAY_ONSET_S, and rest resets phase elapsed.
     const cp = 280
     const wp = 20_000
     const single = predictWorkout(
-      w('4x10\u2032', [
-        { work: { kind: 'duration', seconds: 600 }, rest: { kind: 'duration', seconds: 120 }, count: 4 },
-      ]),
+      w(
+        '4x10\u2032',
+        rep(4, { work: { kind: 'duration', seconds: 600 }, rest: { kind: 'duration', seconds: 120 } }),
+      ),
       cp,
       wp,
     )
-    // No decay was applied within any rep; avg split should exceed CP (anaerobic contribution)
     const P = powerFromSplit(single.avgSplitSeconds)
     expect(P).toBeGreaterThan(cp)
   })
   it('10x 1\u2032/1\u2032 (half the reps) predicts a faster pace than 20x', () => {
-    // With fewer reps at the same rest ratio, the athlete can push harder.
     const p2k = powerFromSplit(108)
     const cp = 0.88 * p2k
     const wp = (p2k - cp) * 432
     const ten = predictWorkout(
-      w('10x1\u2032/1\u2032', [
-        { work: { kind: 'duration', seconds: 60 }, rest: { kind: 'duration', seconds: 60 }, count: 10 },
-      ]),
+      w(
+        '10x1\u2032/1\u2032',
+        rep(10, { work: { kind: 'duration', seconds: 60 }, rest: { kind: 'duration', seconds: 60 } }),
+      ),
       cp,
       wp,
     )
     const twenty = predictWorkout(
-      w('20x1\u2032/1\u2032', [
-        { work: { kind: 'duration', seconds: 60 }, rest: { kind: 'duration', seconds: 60 }, count: 20 },
-      ]),
+      w(
+        '20x1\u2032/1\u2032',
+        rep(20, { work: { kind: 'duration', seconds: 60 }, rest: { kind: 'duration', seconds: 60 } }),
+      ),
       cp,
       wp,
     )
@@ -229,66 +220,224 @@ describe('predictWorkout', () => {
   })
 })
 
-describe('predictWorkout — multi-segment', () => {
+describe('predictWorkout — mixed intervals', () => {
   const CP = 280
   const WP = 20_000
 
-  it('two identical segments collapse to a single-segment prediction', () => {
-    // The user's case: 1×5' + 1×5' with 10s rest should match 2×5' @ 10s as a
-    // single segment. Per-segment splits should both equal the overall split,
-    // and the numbers should add up (rep meters × count = total meters).
+  it('two identical 5\u2032 intervals match a single 2×5\u2032 block', () => {
     const split2 = w('1+1 x 5\u2032', [
-      { work: { kind: 'duration', seconds: 300 }, rest: { kind: 'duration', seconds: 10 }, count: 1 },
-      { work: { kind: 'duration', seconds: 300 }, rest: { kind: 'none' }, count: 1 },
+      { work: { kind: 'duration', seconds: 300 }, rest: { kind: 'duration', seconds: 10 } },
+      { work: { kind: 'duration', seconds: 300 }, rest: { kind: 'none' } },
     ])
-    const single = w('2 x 5\u2032', [
-      { work: { kind: 'duration', seconds: 300 }, rest: { kind: 'duration', seconds: 10 }, count: 2 },
-    ])
+    const dup = w(
+      '2 x 5\u2032',
+      rep(2, { work: { kind: 'duration', seconds: 300 }, rest: { kind: 'duration', seconds: 10 } }),
+    )
     const a = predictWorkout(split2, CP, WP)
-    const b = predictWorkout(single, CP, WP)
+    const b = predictWorkout(dup, CP, WP)
     expect(a.avgSplitSeconds).toBeCloseTo(b.avgSplitSeconds, 1)
-    expect(a.perSegmentSplitsSeconds[0]).toBeCloseTo(a.avgSplitSeconds, 1)
-    expect(a.perSegmentSplitsSeconds[1]).toBeCloseTo(a.avgSplitSeconds, 1)
+    expect(a.perIntervalSplitsSeconds[0]).toBeCloseTo(a.avgSplitSeconds, 1)
+    expect(a.perIntervalSplitsSeconds[1]).toBeCloseTo(a.avgSplitSeconds, 1)
     expect(a.totalMeters).toBeCloseTo(b.totalMeters, 0)
   })
 
-  it('mixed pyramid: short rep segment gets a harder split than long rep segment', () => {
-    // 2×2K + 4×500m: the 500s should be paced harder than the 2Ks — that's the
-    // whole point of varying power per segment instead of using one constant.
+  it('mixed pyramid: short intervals get harder splits than long intervals', () => {
+    // 2×2K + 4×500m: the 500s should be paced harder than the 2Ks.
     const mixed = w('2x2K + 4x500m', [
-      { work: { kind: 'distance', meters: 2000 }, rest: { kind: 'duration', seconds: 300 }, count: 2 },
-      { work: { kind: 'distance', meters: 500 }, rest: { kind: 'duration', seconds: 120 }, count: 4 },
+      ...rep(2, { work: { kind: 'distance', meters: 2000 }, rest: { kind: 'duration', seconds: 300 } }),
+      ...rep(4, { work: { kind: 'distance', meters: 500 }, rest: { kind: 'duration', seconds: 120 } }),
     ])
     const pred = predictWorkout(mixed, CP, WP)
-    const split2k = pred.perSegmentSplitsSeconds[0]
-    const split500 = pred.perSegmentSplitsSeconds[1]
-    expect(split500).toBeLessThan(split2k) // 500m faster than 2K
-    // And the 500s shouldn't exceed what they'd hit solo (upper bound)
+    const split2k = pred.perIntervalSplitsSeconds[0]
+    const split500 = pred.perIntervalSplitsSeconds[2]
+    expect(split500).toBeLessThan(split2k)
+    // 500s bounded above by their solo-set pace
     const solo500 = predictWorkout(
-      w('solo500', [
-        { work: { kind: 'distance', meters: 500 }, rest: { kind: 'duration', seconds: 120 }, count: 4 },
-      ]),
+      w(
+        'solo500',
+        rep(4, { work: { kind: 'distance', meters: 500 }, rest: { kind: 'duration', seconds: 120 } }),
+      ),
       CP,
       WP,
     )
     expect(split500).toBeGreaterThanOrEqual(solo500.avgSplitSeconds - 0.1)
   })
 
-  it('per-segment + avg split are numerically consistent with total meters/time', () => {
+  it('locking an interval forces its end-of-work W\u2032 to the target', () => {
+    const workout = w(
+      '4x2K',
+      rep(4, { work: { kind: 'distance', meters: 2000 }, rest: { kind: 'duration', seconds: 300 } }),
+    )
+    workout.intervals[1].lockedWbalPercent = 60
+    const pred = predictWorkout(workout, CP, WP)
+    expect(pred.perIntervalWbalPercent[1]).toBeCloseTo(60, 0)
+  })
+
+  it('locking the first interval at 100% pins pace to CP (AT-band equivalent)', () => {
+    // Starting at full W' and targeting full W' at end means the effort is
+    // power-neutral — any P <= CP holds at W'_max. The solver should pick CP
+    // (matching the AT band) rather than an arbitrary near-zero power.
+    const workout = w('2K locked 100', [
+      { work: { kind: 'distance', meters: 2000 }, rest: { kind: 'none' }, lockedWbalPercent: 100 },
+    ])
+    const pred = predictWorkout(workout, CP, WP)
+    expect(powerFromSplit(pred.avgSplitSeconds)).toBeCloseTo(CP, 0)
+  })
+
+  it('lower lock target forces earlier intervals to push harder', () => {
+    const base = w(
+      '3x1K',
+      rep(3, { work: { kind: 'distance', meters: 1000 }, rest: { kind: 'duration', seconds: 180 } }),
+    )
+    const easy = { ...base, intervals: base.intervals.map((iv) => ({ ...iv })) }
+    easy.intervals[1].lockedWbalPercent = 70
+    const hard = { ...base, intervals: base.intervals.map((iv) => ({ ...iv })) }
+    hard.intervals[1].lockedWbalPercent = 30
+    const easyPred = predictWorkout(easy, CP, WP)
+    const hardPred = predictWorkout(hard, CP, WP)
+    // Lower W' target at interval 1 means faster pace on intervals 0 and 1
+    expect(hardPred.perIntervalSplitsSeconds[0]).toBeLessThan(easyPred.perIntervalSplitsSeconds[0])
+    expect(hardPred.perIntervalSplitsSeconds[1]).toBeLessThan(easyPred.perIntervalSplitsSeconds[1])
+  })
+
+  it('tail intervals after the last lock still use the minWbal=0 criterion', () => {
+    const workout = w(
+      '4x1K',
+      rep(4, { work: { kind: 'distance', meters: 1000 }, rest: { kind: 'duration', seconds: 180 } }),
+    )
+    workout.intervals[0].lockedWbalPercent = 80
+    const pred = predictWorkout(workout, CP, WP)
+    // Last interval should exhaust W' — perIntervalWbalPercent[3] ≈ 0
+    expect(pred.perIntervalWbalPercent[3]).toBeGreaterThanOrEqual(-0.1)
+    expect(pred.perIntervalWbalPercent[3]).toBeLessThan(1)
+  })
+
+  it('locks at both ends partition into independent sub-problems', () => {
+    const workout = w(
+      '4x1K',
+      rep(4, { work: { kind: 'distance', meters: 1000 }, rest: { kind: 'duration', seconds: 180 } }),
+    )
+    workout.intervals[0].lockedWbalPercent = 75
+    workout.intervals[2].lockedWbalPercent = 25
+    const pred = predictWorkout(workout, CP, WP)
+    expect(pred.perIntervalWbalPercent[0]).toBeCloseTo(75, 0)
+    expect(pred.perIntervalWbalPercent[2]).toBeCloseTo(25, 0)
+  })
+
+  it('computeIntervalBounds returns min ≤ max, both within [0, 100]', () => {
+    const workout = w(
+      '4x2K',
+      rep(4, { work: { kind: 'distance', meters: 2000 }, rest: { kind: 'duration', seconds: 300 } }),
+    )
+    const bounds = computeIntervalBounds(workout, 1, CP, WP)
+    expect(bounds.minPct).toBeGreaterThanOrEqual(0)
+    expect(bounds.maxPct).toBeLessThanOrEqual(100)
+    expect(bounds.minPct).toBeLessThanOrEqual(bounds.maxPct)
+  })
+
+  // Competitive 7:00 rower, fitted via the app's own profile pipeline so CP,
+  // W', Morton W'_M and k are all internally consistent (rp=1.8, r=0.70).
+  const comp = fitProfile({ twoKSeconds: 420, tier: 'competitive' })
+
+  it('bandPower: UT2/UT1/AT are 0.75/0.90/1.00 of CP', () => {
+    expect(bandPower('UT2', comp.cpWatts)).toBeCloseTo(0.75 * comp.cpWatts, 6)
+    expect(bandPower('UT1', comp.cpWatts)).toBeCloseTo(0.90 * comp.cpWatts, 6)
+    expect(bandPower('AT', comp.cpWatts)).toBeCloseTo(comp.cpWatts, 6)
+  })
+
+  it('banded interval pins power to its band value, independent of W′ room', () => {
+    const expectedUT2 = 0.75 * comp.cpWatts
+    const expectedUT1 = 0.90 * comp.cpWatts
+    const expectedAT = comp.cpWatts
+
+    const workout = w('4x2K banded', [
+      { work: { kind: 'distance', meters: 2000 }, rest: { kind: 'duration', seconds: 300 }, band: 'UT2' },
+      { work: { kind: 'distance', meters: 2000 }, rest: { kind: 'duration', seconds: 300 }, band: 'UT1' },
+      { work: { kind: 'distance', meters: 2000 }, rest: { kind: 'duration', seconds: 300 }, band: 'AT' },
+      { work: { kind: 'distance', meters: 2000 }, rest: { kind: 'none' }, band: 'UT2' },
+    ])
+    const pred = predictWorkout(
+      workout,
+      comp.cpWatts,
+      comp.wPrimeJoules,
+      undefined,
+      0,
+      0,
+      comp.wPrimeMortonJoules,
+      comp.kSeconds,
+    )
+    expect(powerFromSplit(pred.perIntervalSplitsSeconds[0])).toBeCloseTo(expectedUT2, 0)
+    expect(powerFromSplit(pred.perIntervalSplitsSeconds[1])).toBeCloseTo(expectedUT1, 0)
+    expect(powerFromSplit(pred.perIntervalSplitsSeconds[2])).toBeCloseTo(expectedAT, 0)
+    expect(powerFromSplit(pred.perIntervalSplitsSeconds[3])).toBeCloseTo(expectedUT2, 0)
+  })
+
+  it('UT2 band recovers W′ — even many reps stay near full', () => {
+    const workout = w(
+      '10x5′ UT2',
+      rep(10, { work: { kind: 'duration', seconds: 300 }, rest: { kind: 'duration', seconds: 60 }, band: 'UT2' }),
+    )
+    const pred = predictWorkout(
+      workout,
+      comp.cpWatts,
+      comp.wPrimeJoules,
+      undefined,
+      0,
+      0,
+      comp.wPrimeMortonJoules,
+      comp.kSeconds,
+    )
+    // At 0.75·CP, W' rebuilds during work — every interval ends near full W'.
+    for (const pct of pred.perIntervalWbalPercent) {
+      expect(pct).toBeGreaterThan(95)
+    }
+  })
+
+  it('mixed band + unbanded: banded interval pinned, unbanded pace responds', () => {
+    // 3×1K where the middle rep is banded AT; the two unbanded reps should be
+    // paced above CP (harder than AT) to use up remaining W' safely.
+    const workout = w('3x1K mixed', [
+      { work: { kind: 'distance', meters: 1000 }, rest: { kind: 'duration', seconds: 180 } },
+      { work: { kind: 'distance', meters: 1000 }, rest: { kind: 'duration', seconds: 180 }, band: 'AT' },
+      { work: { kind: 'distance', meters: 1000 }, rest: { kind: 'none' } },
+    ])
+    const pred = predictWorkout(
+      workout,
+      comp.cpWatts,
+      comp.wPrimeJoules,
+      undefined,
+      0,
+      0,
+      comp.wPrimeMortonJoules,
+      comp.kSeconds,
+    )
+    // Middle rep pinned at CP.
+    expect(powerFromSplit(pred.perIntervalSplitsSeconds[1])).toBeCloseTo(comp.cpWatts, 0)
+    // Flanking reps above CP (they have W' to spend before and after the AT rep).
+    expect(powerFromSplit(pred.perIntervalSplitsSeconds[0])).toBeGreaterThan(comp.cpWatts)
+    expect(powerFromSplit(pred.perIntervalSplitsSeconds[2])).toBeGreaterThan(comp.cpWatts)
+  })
+
+  it('per-interval + avg split are numerically consistent with total meters/time', () => {
     const mixed = w('pyramid', [
-      { work: { kind: 'distance', meters: 1000 }, rest: { kind: 'duration', seconds: 180 }, count: 2 },
-      { work: { kind: 'duration', seconds: 60 }, rest: { kind: 'duration', seconds: 60 }, count: 5 },
+      ...rep(2, { work: { kind: 'distance', meters: 1000 }, rest: { kind: 'duration', seconds: 180 } }),
+      ...rep(5, { work: { kind: 'duration', seconds: 60 }, rest: { kind: 'duration', seconds: 60 } }),
     ])
     const pred = predictWorkout(mixed, CP, WP)
-    // Reconstruct total meters from per-segment splits
-    const split1 = pred.perSegmentSplitsSeconds[0]
-    const split2 = pred.perSegmentSplitsSeconds[1]
-    const meters1 = 2 * 1000
-    const meters2 = 5 * ((500 * 60) / split2)
-    const totalM = meters1 + meters2
-    const seconds1 = 2 * ((1000 * split1) / 500)
-    const seconds2 = 5 * 60
-    const totalS = seconds1 + seconds2
+    // Reconstruct totals from per-interval splits
+    let totalM = 0
+    let totalS = 0
+    for (let i = 0; i < mixed.intervals.length; i++) {
+      const iv = mixed.intervals[i]
+      const s = pred.perIntervalSplitsSeconds[i]
+      if (iv.work.kind === 'distance') {
+        totalM += iv.work.meters
+        totalS += (iv.work.meters * s) / 500
+      } else {
+        totalS += iv.work.seconds
+        totalM += (500 * iv.work.seconds) / s
+      }
+    }
     expect(pred.totalMeters).toBeCloseTo(totalM, 0)
     expect(pred.totalWorkSeconds).toBeCloseTo(totalS, 0)
     expect(pred.avgSplitSeconds).toBeCloseTo((totalS / totalM) * 500, 2)

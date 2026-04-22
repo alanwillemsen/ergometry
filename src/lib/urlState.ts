@@ -1,4 +1,5 @@
 import type { PersistedState } from './storage'
+import { migrateIntervals } from './storage'
 
 // base64url encode/decode without padding — URL-safe and short.
 function b64urlEncode(s: string): string {
@@ -43,21 +44,25 @@ export function buildShareUrl(state: Partial<PersistedState>): string {
 
 // Workout share URL — encodes only the workout definition, not the user's profile.
 // Recipients apply their own 2K time and tier for predictions.
-export function buildWorkoutShareUrl(w: { name: string; segments: unknown }): string {
+export function buildWorkoutShareUrl(w: { name: string; intervals: unknown }): string {
   const base = `${location.origin}${location.pathname}`
   return `${base}#wkt.v1.${b64urlEncode(JSON.stringify(w))}`
 }
 
-export function readHashWorkout(): { name: string; segments: unknown } | null {
+export function readHashWorkout(): { name: string; intervals: unknown[] } | null {
   if (typeof location === 'undefined' || !location.hash) return null
   const clean = location.hash.replace(/^#/, '')
   if (!clean.startsWith('wkt.v1.')) return null
   try {
-    const parsed = JSON.parse(b64urlDecode(clean.slice(7)))
-    if (typeof parsed?.name === 'string' && Array.isArray(parsed?.segments)) {
-      return parsed as { name: string; segments: unknown }
+    const parsed = JSON.parse(b64urlDecode(clean.slice(7))) as {
+      name?: unknown
+      intervals?: unknown
+      segments?: unknown
     }
-    return null
+    if (typeof parsed?.name !== 'string') return null
+    const raw = parsed.intervals ?? parsed.segments
+    if (!Array.isArray(raw)) return null
+    return { name: parsed.name, intervals: migrateIntervals(raw) }
   } catch {
     return null
   }

@@ -1,34 +1,81 @@
-import { forwardRef, useEffect, useRef, useState, type CSSProperties, type HTMLAttributes } from 'react'
-import type { Workout, WorkoutPrediction, WorkoutSegment } from '../model/workouts'
-import { formatSplit, formatTime } from '../lib/time'
+import { forwardRef, useEffect, useRef, useState, type CSSProperties, type HTMLAttributes, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import type { Workout, WorkoutPrediction, WorkoutInterval, Rep, Rest } from '../model/workouts'
+import { formatSplit, formatDuration } from '../lib/time'
 
-function repTargets(segments: WorkoutSegment[], prediction: WorkoutPrediction, isOwned: boolean): string[] {
+function sameRep(a: Rep, b: Rep): boolean {
+  if (a.kind !== b.kind) return false
+  return a.kind === 'distance' ? a.meters === (b as typeof a).meters : a.seconds === (b as typeof a).seconds
+}
+function sameRest(a: Rest, b: Rest): boolean {
+  if (a.kind !== b.kind) return false
+  if (a.kind === 'none') return true
+  return a.kind === 'distance'
+    ? a.meters === (b as typeof a).meters
+    : a.seconds === (b as typeof a).seconds
+}
+function sameInterval(a: WorkoutInterval, b: WorkoutInterval): boolean {
+  return sameRep(a.work, b.work) && sameRest(a.rest, b.rest)
+}
+
+interface IntervalGroup {
+  count: number
+  interval: WorkoutInterval
+  startIdx: number
+}
+function groupIntervals(intervals: WorkoutInterval[]): IntervalGroup[] {
+  const groups: IntervalGroup[] = []
+  for (let i = 0; i < intervals.length; i++) {
+    const prev = groups[groups.length - 1]
+    if (prev && sameInterval(prev.interval, intervals[i])) {
+      prev.count++
+    } else {
+      groups.push({ count: 1, interval: intervals[i], startIdx: i })
+    }
+  }
+  // Rest on the final interval is dropped on save (nothing follows it), which
+  // would otherwise split "4 × 10' w/ 2'r" into a 3-group + a lone 1-group.
+  // Coalesce that trailing bare rep back into the preceding group for display.
+  if (groups.length >= 2) {
+    const last = groups[groups.length - 1]
+    const prev = groups[groups.length - 2]
+    if (
+      last.count === 1 &&
+      last.interval.rest.kind === 'none' &&
+      prev.interval.rest.kind !== 'none' &&
+      sameRep(prev.interval.work, last.interval.work)
+    ) {
+      prev.count += 1
+      groups.pop()
+    }
+  }
+  return groups
+}
+
+function repTargets(intervals: WorkoutInterval[], prediction: WorkoutPrediction, isOwned: boolean): string[] {
+  const groups = groupIntervals(intervals)
   const parts: string[] = []
-  if (isOwned && segments.length > 1) {
-    for (let i = 0; i < segments.length; i++) {
-      const seg = segments[i]
-      if (seg.count < 1) continue
-      const splitStr = formatSplit(prediction.perSegmentSplitsSeconds[i])
-      const prefix = seg.count > 1 ? `${seg.count} × ` : ''
+  if (isOwned) {
+    for (const g of groups) {
+      const splitStr = formatSplit(prediction.perIntervalSplitsSeconds[g.startIdx])
+      const prefix = g.count > 1 ? `${g.count} \u00d7 ` : ''
       const restStr =
-        seg.rest.kind === 'duration' ? `, ${formatTime(seg.rest.seconds)}r`
-        : seg.rest.kind === 'distance' ? `, ${seg.rest.meters}m r`
+        g.interval.rest.kind === 'duration' ? `, ${formatDuration(g.interval.rest.seconds)}r`
+        : g.interval.rest.kind === 'distance' ? `, ${g.interval.rest.meters}m r`
         : ''
-      if (seg.work.kind === 'distance') {
-        parts.push(`${prefix}${seg.work.meters}m @ ${splitStr}${restStr}`)
+      if (g.interval.work.kind === 'distance') {
+        parts.push(`${prefix}${g.interval.work.meters}m @ ${splitStr}${restStr}`)
       } else {
-        parts.push(`${prefix}${formatTime(seg.work.seconds)} @ ${splitStr}${restStr}`)
+        parts.push(`${prefix}${formatDuration(g.interval.work.seconds)} @ ${splitStr}${restStr}`)
       }
     }
   } else {
     const splitSeconds = prediction.avgSplitSeconds
-    for (const seg of segments) {
-      if (seg.count < 1) continue
-      if (seg.work.kind === 'distance') {
-        if (seg.count === 1) continue
-        parts.push(`${seg.count} × ${seg.work.meters}m in ${formatTime((seg.work.meters * splitSeconds) / 500)}`)
+    for (const g of groups) {
+      if (g.interval.work.kind === 'distance') {
+        if (g.count === 1) continue
+        parts.push(`${g.count} \u00d7 ${g.interval.work.meters}m in ${formatDuration((g.interval.work.meters * splitSeconds) / 500)}`)
       } else {
-        parts.push(`${seg.count} × ${formatTime(seg.work.seconds)} ≈ ${((500 * seg.work.seconds) / splitSeconds).toFixed(0)}m`)
+        parts.push(`${g.count} \u00d7 ${formatDuration(g.interval.work.seconds)} \u2248 ${((500 * g.interval.work.seconds) / splitSeconds).toFixed(0)}m`)
       }
     }
   }
@@ -40,8 +87,8 @@ type DragHandleProps = HTMLAttributes<HTMLButtonElement>
 export interface WorkoutCardProps {
   workout: Workout
   prediction: WorkoutPrediction | null
-  onEdit?: () => void
-  onDelete?: () => void
+  isOwned?: boolean
+  onOpen?: () => void
   onShare?: () => void
   onMoveTop?: () => void
   onMoveBottom?: () => void
@@ -55,8 +102,8 @@ export const WorkoutCard = forwardRef<HTMLElement, WorkoutCardProps>(function Wo
   {
     workout,
     prediction,
-    onEdit,
-    onDelete,
+    isOwned,
+    onOpen,
     onShare,
     onMoveTop,
     onMoveBottom,
@@ -67,18 +114,35 @@ export const WorkoutCard = forwardRef<HTMLElement, WorkoutCardProps>(function Wo
   },
   ref,
 ) {
-  const reps = prediction ? repTargets(workout.segments, prediction, !!onEdit) : []
-  const hasMenu = !!(onEdit || onDelete || onShare || onMoveTop || onMoveBottom)
+  const reps = prediction ? repTargets(workout.intervals, prediction, !!isOwned) : []
+  const hasMenu = !!(onShare || onMoveTop || onMoveBottom)
+  const clickable = !!onOpen
 
   // Show transient share status as a banner under the title.
   const statusText =
     shareStatus === 'copied' ? 'link copied ✓' : shareStatus === 'error' ? 'copy failed' : null
 
+  const handleClick = () => {
+    if (onOpen) onOpen()
+  }
+  const handleKey = (e: ReactKeyboardEvent) => {
+    if (!onOpen) return
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onOpen()
+    }
+  }
+
   return (
     <article
       ref={ref}
-      className={`workout-card${isDragging ? ' is-dragging' : ''}`}
+      className={`workout-card${isDragging ? ' is-dragging' : ''}${clickable ? ' is-clickable' : ''}`}
       style={style}
+      onClick={clickable ? handleClick : undefined}
+      onKeyDown={clickable ? handleKey : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      role={clickable ? 'button' : undefined}
+      aria-label={clickable ? `Open ${workout.name}` : undefined}
     >
       <header>
         {dragHandleProps && (
@@ -87,6 +151,7 @@ export const WorkoutCard = forwardRef<HTMLElement, WorkoutCardProps>(function Wo
             className="drag-handle"
             aria-label="Reorder workout"
             title="Drag to reorder"
+            onClick={(e) => e.stopPropagation()}
             {...dragHandleProps}
           >
             ⠿
@@ -95,11 +160,9 @@ export const WorkoutCard = forwardRef<HTMLElement, WorkoutCardProps>(function Wo
         <h3>{workout.name}</h3>
         {hasMenu && (
           <WorkoutCardMenu
-            onEdit={onEdit}
             onShare={onShare}
             onMoveTop={onMoveTop}
             onMoveBottom={onMoveBottom}
-            onDelete={onDelete}
           />
         )}
       </header>
@@ -111,7 +174,7 @@ export const WorkoutCard = forwardRef<HTMLElement, WorkoutCardProps>(function Wo
             <span className="unit"> /500m</span>
           </div>
           <div className="card-meta">
-            {formatTime(prediction.totalWorkSeconds)} work · {prediction.totalMeters.toFixed(0)}m
+            {formatDuration(prediction.totalWorkSeconds)} work · {prediction.totalMeters.toFixed(0)}m
           </div>
           {reps.map((line, i) => <div key={i} className="card-reps">{line}</div>)}
         </>
@@ -123,17 +186,13 @@ export const WorkoutCard = forwardRef<HTMLElement, WorkoutCardProps>(function Wo
 })
 
 function WorkoutCardMenu({
-  onEdit,
   onShare,
   onMoveTop,
   onMoveBottom,
-  onDelete,
 }: {
-  onEdit?: () => void
   onShare?: () => void
   onMoveTop?: () => void
   onMoveBottom?: () => void
-  onDelete?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -160,7 +219,7 @@ function WorkoutCardMenu({
   }
 
   return (
-    <div className="card-menu" ref={ref}>
+    <div className="card-menu" ref={ref} onClick={(e) => e.stopPropagation()}>
       <button
         type="button"
         className="menu-trigger"
@@ -173,9 +232,6 @@ function WorkoutCardMenu({
       </button>
       {open && (
         <ul className="menu-list" role="menu">
-          {onEdit && (
-            <li><button type="button" role="menuitem" onClick={() => run(onEdit)}>Edit</button></li>
-          )}
           {onShare && (
             <li><button type="button" role="menuitem" onClick={() => run(onShare)}>Share link</button></li>
           )}
@@ -184,9 +240,6 @@ function WorkoutCardMenu({
           )}
           {onMoveBottom && (
             <li><button type="button" role="menuitem" onClick={() => run(onMoveBottom)}>Move to bottom</button></li>
-          )}
-          {onDelete && (
-            <li><button type="button" role="menuitem" className="danger" onClick={() => run(onDelete)}>Delete</button></li>
           )}
         </ul>
       )}

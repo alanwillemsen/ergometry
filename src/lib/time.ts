@@ -19,6 +19,19 @@ export function formatSplit(seconds: number): string {
   return `${m}:${s.toFixed(1).padStart(4, '0')}`
 }
 
+// Whole-second rendering for work/rest durations. Split-precision tenths
+// would be noise for interval lengths like "10:00" or "2:00r".
+export function formatDuration(totalSeconds: number): string {
+  if (!isFinite(totalSeconds) || totalSeconds < 0) return '—'
+  const total = Math.round(totalSeconds)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total - h * 3600 - m * 60
+  const sStr = s.toString().padStart(2, '0')
+  if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${sStr}`
+  return `${m}:${sStr}`
+}
+
 // Parse "7:12", "7:12.3", "1:45.1", "420", "420.5", "72:00" → seconds.
 // Returns NaN for invalid input.
 export function parseTime(input: string): number {

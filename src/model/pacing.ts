@@ -1,4 +1,5 @@
 import { TIER_DEFS, DEFAULT_CUSTOM_CP_RATIO, DEFAULT_CUSTOM_PEAK_RATIO, type Tier } from './tiers'
+import type { Band } from './workouts'
 
 // Concept2's published relation: watts = 2.80 / (pace_in_seconds_per_meter)^3
 // With split expressed as seconds per 500m: pace = split/500, so
@@ -222,4 +223,25 @@ export function fitProfile(profile: AthleteProfile): FittedProfile {
 export function impliedDistanceTime(cpWatts: number, wPrimeJoules: number, meters: number): number {
   const split = solveSplitForDistance(cpWatts, wPrimeJoules, meters)
   return distanceTimeFromSplit(split, meters)
+}
+
+// Traditional rowing training-band anchors. All three bands sit at or below
+// CP, so each band power is determined by CP alone.
+//
+//   UT2   0.75 · CP   deep recovery, HR ~60-70%, indefinite
+//   UT1   0.90 · CP   top aerobic, sustainable ~60+ min
+//   AT    1.00 · CP   MLSS / threshold (W' neutral)
+//
+// Above-CP zones (VO₂max / anaerobic) are handled by the solver's default
+// "Max" mode — it pushes power to the Morton ceiling over the whole set,
+// giving each interval its own length-appropriate drain-regime power.
+export function bandPower(band: Band, cpWatts: number): number {
+  switch (band) {
+    case 'UT2':
+      return 0.75 * cpWatts
+    case 'UT1':
+      return 0.90 * cpWatts
+    case 'AT':
+      return cpWatts
+  }
 }

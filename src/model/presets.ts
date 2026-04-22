@@ -1,17 +1,17 @@
-import type { Workout, WorkoutInterval, Rep, Rest, Band } from './workouts'
+import type { Workout, WorkoutInterval, Band } from './workouts'
 
 export interface PresetGroup {
   label: string
   workouts: Workout[]
 }
 
-function mkRep(r: { distance?: number; duration?: number }): Rep {
+function mkWork(r: { distance?: number; duration?: number }): WorkoutInterval['work'] {
   return r.distance
     ? { kind: 'distance', meters: r.distance }
     : { kind: 'duration', seconds: r.duration! }
 }
 
-function mkRest(r: { distance?: number; duration?: number }): Rest {
+function mkRest(r: { distance?: number; duration?: number }): WorkoutInterval['rest'] {
   return r.distance
     ? { kind: 'distance', meters: r.distance }
     : r.duration !== undefined
@@ -22,7 +22,7 @@ function mkRest(r: { distance?: number; duration?: number }): Rest {
 const test = (id: string, name: string, rep: { distance?: number; duration?: number }): Workout => ({
   id,
   name,
-  intervals: [{ work: mkRep(rep), rest: { kind: 'none' } }],
+  intervals: [{ work: mkWork(rep), rest: { kind: 'none' } }],
 })
 
 const interval = (
@@ -33,7 +33,7 @@ const interval = (
   rest: { distance?: number; duration?: number },
   band?: Band,
 ): Workout => {
-  const one: WorkoutInterval = { work: mkRep(work), rest: mkRest(rest), ...(band ? { band } : {}) }
+  const one: WorkoutInterval = { work: mkWork(work), rest: mkRest(rest), ...(band ? { band } : {}) }
   return { id, name, intervals: Array.from({ length: count }, () => ({ ...one })) }
 }
 
@@ -60,10 +60,12 @@ export const PRESET_GROUPS: PresetGroup[] = [
     ],
   },
   {
-    label: 'steady-state',
+    label: 'UT1 / steady-state',
     workouts: [
-      interval('60min-ut1', "60′ UT1", 1, { duration: 3600 }, {}, 'UT1'),
-      interval('90min-ut1', "90′ UT2", 1, { duration: 5400 }, {}, 'UT2'),
+      interval('4x20-2-ut1', "4 × 20′ UT1 @ 2′ rest", 4, { duration: 1200 }, { duration: 120 }, 'UT1'),
+      interval('3x30-5-ut1', "3 × 30′ UT1 @ 5′ rest", 3, { duration: 1800 }, { duration: 300 }, 'UT1'),
+      interval('2x40-5-ut1', "2 × 40′ UT1 @ 5′ rest", 2, { duration: 2400 }, { duration: 300 }, 'UT1'),
+      interval('2x45-5-ut1', "2 × 45′ UT1 @ 5′ rest", 2, { duration: 2700 }, { duration: 300 }, 'UT1'),
     ],
   },
   {

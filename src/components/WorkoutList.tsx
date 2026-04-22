@@ -19,15 +19,16 @@ import type { FittedProfile } from '../model/pacing'
 import { predictWorkout } from '../model/wprime'
 import { PRESET_GROUPS } from '../model/presets'
 import { WorkoutCard, type WorkoutCardProps } from './WorkoutCard'
-import { buildWorkoutFromSegments, type EditableSegment } from './WorkoutBuilder'
-import type { SavedWorkout } from '../lib/storage'
+import { buildWorkoutFromIntervals, type EditableInterval } from './WorkoutBuilder'
+import { readWorkoutIntervals, type SavedWorkout } from '../lib/storage'
 
 export function WorkoutList({
   fit,
   savedWorkouts,
   shareStatuses,
-  onEditWorkout,
-  onDeleteWorkout,
+  onAddWorkout,
+  onOpenSavedWorkout,
+  onOpenPreset,
   onShareWorkout,
   onReorderWorkouts,
   onMoveWorkoutToEdge,
@@ -35,8 +36,9 @@ export function WorkoutList({
   fit: FittedProfile | null
   savedWorkouts: SavedWorkout[]
   shareStatuses: Record<string, 'copied' | 'error'>
-  onEditWorkout: (id: string) => void
-  onDeleteWorkout: (id: string) => void
+  onAddWorkout: () => void
+  onOpenSavedWorkout: (id: string) => void
+  onOpenPreset: (id: string) => void
   onShareWorkout: (id: string) => void
   onReorderWorkouts: (activeId: string, overId: string) => void
   onMoveWorkoutToEdge: (id: string, edge: 'top' | 'bottom') => void
@@ -68,7 +70,8 @@ export function WorkoutList({
     const map = new Map()
     for (const sw of savedWorkouts) {
       if (!fit) { map.set(sw.id, null); continue }
-      const w = buildWorkoutFromSegments(sw.name, sw.segments as EditableSegment[])
+      const intervals = readWorkoutIntervals(sw) as EditableInterval[]
+      const w = buildWorkoutFromIntervals(sw.name, intervals)
       map.set(
         sw.id,
         w
@@ -102,6 +105,11 @@ export function WorkoutList({
 
   return (
     <div className="workout-list">
+      <div className="workout-list-actions">
+        <button type="button" className="add-workout-btn" onClick={onAddWorkout}>
+          + Add workout
+        </button>
+      </div>
       {savedWorkouts.length > 0 && (
         <section className="preset-group">
           <h3 className="group-label">Yours</h3>
@@ -109,16 +117,17 @@ export function WorkoutList({
             <SortableContext items={savedWorkouts.map((sw) => sw.id)} strategy={verticalListSortingStrategy}>
               <div className="card-grid">
                 {savedWorkouts.map((sw, idx) => {
-                  const w = buildWorkoutFromSegments(sw.name, sw.segments as EditableSegment[])
+                  const intervals = readWorkoutIntervals(sw) as EditableInterval[]
+                  const w = buildWorkoutFromIntervals(sw.name, intervals)
                   return (
                     <SortableWorkoutCard
                       key={sw.id}
                       id={sw.id}
-                      workout={w ?? { id: sw.id, name: sw.name, segments: [] }}
+                      workout={w ?? { id: sw.id, name: sw.name, intervals: [] }}
                       prediction={savedPredictions.get(sw.id) ?? null}
                       shareStatus={shareStatuses[sw.id]}
-                      onEdit={() => onEditWorkout(sw.id)}
-                      onDelete={() => onDeleteWorkout(sw.id)}
+                      isOwned
+                      onOpen={() => onOpenSavedWorkout(sw.id)}
                       onShare={() => onShareWorkout(sw.id)}
                       onMoveTop={idx > 0 ? () => onMoveWorkoutToEdge(sw.id, 'top') : undefined}
                       onMoveBottom={idx < savedWorkouts.length - 1 ? () => onMoveWorkoutToEdge(sw.id, 'bottom') : undefined}
@@ -136,7 +145,12 @@ export function WorkoutList({
           <h3 className="group-label">{group.label}</h3>
           <div className="card-grid">
             {group.workouts.map((w) => (
-              <WorkoutCard key={w.id} workout={w} prediction={presetPredictions.get(w.id) ?? null} />
+              <WorkoutCard
+                key={w.id}
+                workout={w}
+                prediction={presetPredictions.get(w.id) ?? null}
+                onOpen={() => onOpenPreset(w.id)}
+              />
             ))}
           </div>
         </section>

@@ -4,18 +4,28 @@ import { TIER_DEFS, type Tier } from './model/tiers'
 import { parseTime, formatTime, formatSplit } from './lib/time'
 import { TierInsight } from './components/TierInsight'
 import { WorkoutList } from './components/WorkoutList'
+import { type EditableInterval, workoutToEditableIntervals } from './components/WorkoutBuilder'
+import { WorkoutModal } from './components/WorkoutModal'
+import { ALL_PRESETS } from './model/presets'
 import {
-  WorkoutBuilder,
-  emptySegment,
-  type EditableSegment,
-} from './components/WorkoutBuilder'
-import { loadState, saveState, type PersistedState, type SavedWorkout } from './lib/storage'
+  loadState,
+  saveState,
+  readWorkoutIntervals,
+  type PersistedState,
+  type SavedWorkout,
+} from './lib/storage'
 import { buildShareUrl, buildWorkoutShareUrl, readHashState, readHashWorkout } from './lib/urlState'
 
 const ALL_TIERS: Tier[] = ['world-class', 'competitive', 'recreational', 'custom']
 
 type CustomMode = 'slider' | 'scores'
-type Tab = 'profile' | 'workouts' | 'build'
+type Tab = 'profile' | 'workouts'
+type ModalState =
+  | { kind: 'create'; name?: string; intervals?: EditableInterval[] }
+  | { kind: 'edit'; id: string }
+  | { kind: 'view-saved'; id: string }
+  | { kind: 'view-preset'; presetId: string }
+  | null
 
 const DEFAULTS = {
   twoKInput: '7:00',
@@ -24,8 +34,6 @@ const DEFAULTS = {
   customRatio: 0.7,
   sixKInput: '',
   savedWorkouts: [] as SavedWorkout[],
-  builderName: 'New workout',
-  builderSegments: [emptySegment()],
 }
 
 function generateId(): string {
@@ -73,15 +81,20 @@ function initialState() {
   const hash = readHashState()
   const stored = loadState()
   const src = hash ?? stored ?? null
+  const savedWorkouts = Array.isArray(src?.savedWorkouts)
+    ? (src!.savedWorkouts as SavedWorkout[]).map((sw) => ({
+        id: sw.id,
+        name: sw.name,
+        intervals: readWorkoutIntervals(sw),
+      }))
+    : DEFAULTS.savedWorkouts
   return {
     twoKInput: (src?.twoKInput as string) ?? DEFAULTS.twoKInput,
     tier: (src?.tier as Tier) ?? DEFAULTS.tier,
     customMode: (src?.customMode as CustomMode) ?? DEFAULTS.customMode,
     customRatio: (src?.customRatio as number) ?? DEFAULTS.customRatio,
     sixKInput: (src?.sixKInput as string) ?? DEFAULTS.sixKInput,
-    savedWorkouts: (src?.savedWorkouts as SavedWorkout[]) ?? DEFAULTS.savedWorkouts,
-    builderName: (src?.builderName as string) ?? DEFAULTS.builderName,
-    builderSegments: (src?.builderSegments as EditableSegment[]) ?? DEFAULTS.builderSegments,
+    savedWorkouts,
   }
 }
 
@@ -107,19 +120,15 @@ function App() {
   const [savedWorkouts, setSavedWorkouts] = useState<SavedWorkout[]>(init.savedWorkouts)
   const [shareStatuses, setShareStatuses] = useState<Record<string, 'copied' | 'error'>>({})
 
-  // Builder state
-  const [builderName, setBuilderName] = useState(init.builderName)
-  const [builderSegments, setBuilderSegments] = useState<EditableSegment[]>(init.builderSegments)
-  const [editingId, setEditingId] = useState<string | null>(null)
-
   // UI state
   const [activeTab, setActiveTab] = useState<Tab>(() =>
     isFirstTimeLike(loadState()) ? 'profile' : 'workouts',
   )
+  const [modal, setModal] = useState<ModalState>(null)
   const [profileShareStatus, setProfileShareStatus] = useState<'' | 'copied' | 'error'>('')
-  const [sharedWorkout, setSharedWorkout] = useState<{ name: string; segments: EditableSegment[] } | null>(() => {
+  const [sharedWorkout, setSharedWorkout] = useState<{ name: string; intervals: EditableInterval[] } | null>(() => {
     const w = readHashWorkout()
-    return w ? { name: w.name, segments: w.segments as EditableSegment[] } : null
+    return w ? { name: w.name, intervals: w.intervals as EditableInterval[] } : null
   })
   const [helpOpen, setHelpOpen] = useState(() => isFirstTimeLike(loadState()))
 
@@ -130,24 +139,10 @@ function App() {
     }
   }, [])
 
-  // Treat browser back as "exit edit" when a workout is being edited.
-  useEffect(() => {
-    const onPop = () => {
-      if (activeTab === 'build' && editingId !== null) {
-        setEditingId(null)
-        setBuilderName(DEFAULTS.builderName)
-        setBuilderSegments(DEFAULTS.builderSegments)
-        setActiveTab('workouts')
-      }
-    }
-    window.addEventListener('popstate', onPop)
-    return () => window.removeEventListener('popstate', onPop)
-  }, [activeTab, editingId])
-
   // Persist state
   useEffect(() => {
-    saveState({ twoKInput, tier, customMode, customRatio, sixKInput, savedWorkouts, builderName, builderSegments })
-  }, [twoKInput, tier, customMode, customRatio, sixKInput, savedWorkouts, builderName, builderSegments])
+    saveState({ twoKInput, tier, customMode, customRatio, sixKInput, savedWorkouts })
+  }, [twoKInput, tier, customMode, customRatio, sixKInput, savedWorkouts])
 
   // Derived profile
   const twoKSeconds = parseTime(twoKInput)
@@ -203,24 +198,21 @@ function App() {
   }
 
   // Workout list actions
-  const handleEditWorkout = (id: string) => {
-    const w = savedWorkouts.find((sw) => sw.id === id)
-    if (!w) return
-    setBuilderName(w.name)
-    setBuilderSegments(w.segments as EditableSegment[])
-    setEditingId(id)
-    setActiveTab('build')
-    history.pushState({ ergView: 'edit' }, '')
+  const handleAddWorkout = () => {
+    setModal({ kind: 'create' })
+  }
+
+  const handleOpenSavedWorkout = (id: string) => {
+    setModal({ kind: 'view-saved', id })
+  }
+
+  const handleOpenPreset = (id: string) => {
+    setModal({ kind: 'view-preset', presetId: id })
   }
 
   const handleDeleteWorkout = (id: string) => {
-    if (!confirm('Delete this workout?')) return
     setSavedWorkouts((prev) => prev.filter((w) => w.id !== id))
-    if (editingId === id) {
-      setEditingId(null)
-      setBuilderName(DEFAULTS.builderName)
-      setBuilderSegments(DEFAULTS.builderSegments)
-    }
+    setModal(null)
   }
 
   const handleMoveWorkoutToEdge = (id: string, edge: 'top' | 'bottom') => {
@@ -248,36 +240,37 @@ function App() {
   const handleShareWorkout = async (id: string) => {
     const w = savedWorkouts.find((sw) => sw.id === id)
     if (!w) return
-    const url = buildWorkoutShareUrl({ name: w.name, segments: w.segments })
+    const url = buildWorkoutShareUrl({ name: w.name, intervals: readWorkoutIntervals(w) })
     const ok = await copyToClipboard(url)
     const status = ok ? 'copied' : 'error'
     setShareStatuses((prev) => ({ ...prev, [id]: status }))
     setTimeout(() => setShareStatuses((prev) => { const n = { ...prev }; delete n[id]; return n }), 2000)
   }
 
-  // Builder save
-  const handleBuilderSave = (name: string, segments: EditableSegment[]) => {
-    if (editingId) {
-      setSavedWorkouts((prev) => prev.map((w) => w.id === editingId ? { ...w, name, segments } : w))
+  // Builder save — rest on the last interval is meaningless (nothing follows)
+  // so drop it before persisting. The card renderer re-coalesces that trailing
+  // bare rep with the preceding group so "4 × 10' w/ 2'r" still displays intact.
+  const handleBuilderSave = (name: string, intervals: EditableInterval[]) => {
+    const normalized = intervals.length > 0
+      ? intervals.map((iv, idx) =>
+          idx === intervals.length - 1 && iv.restKind !== 'none'
+            ? { ...iv, restKind: 'none' as const }
+            : iv,
+        )
+      : intervals
+    if (modal?.kind === 'edit') {
+      const id = modal.id
+      setSavedWorkouts((prev) => prev.map((w) => w.id === id ? { ...w, name, intervals: normalized } : w))
     } else {
-      setSavedWorkouts((prev) => [{ id: generateId(), name, segments }, ...prev])
+      setSavedWorkouts((prev) => [{ id: generateId(), name, intervals: normalized }, ...prev])
     }
-    setEditingId(null)
-    setBuilderName(DEFAULTS.builderName)
-    setBuilderSegments(DEFAULTS.builderSegments)
-    setActiveTab('workouts')
-  }
-
-  const handleNewWorkout = () => {
-    setEditingId(null)
-    setBuilderName(DEFAULTS.builderName)
-    setBuilderSegments(DEFAULTS.builderSegments)
+    setModal(null)
   }
 
   // Shared workout received via link
   const handleSaveSharedWorkout = () => {
     if (!sharedWorkout) return
-    setSavedWorkouts((prev) => [{ id: generateId(), name: sharedWorkout.name, segments: sharedWorkout.segments }, ...prev])
+    setSavedWorkouts((prev) => [{ id: generateId(), name: sharedWorkout.name, intervals: sharedWorkout.intervals }, ...prev])
     setSharedWorkout(null)
     setActiveTab('workouts')
   }
@@ -300,10 +293,7 @@ function App() {
             <strong>Profile</strong> — enter your 2K and pick a tier (or customize from a 6K).
           </li>
           <li>
-            <strong>Workouts</strong> — see predicted splits for preset and saved workouts.
-          </li>
-          <li>
-            <strong>Create</strong> — build your own workouts; target splits update as you type.
+            <strong>Workouts</strong> — see predicted splits for presets, or add your own. Tap a saved card to edit it.
           </li>
         </ol>
         <p className="hint">
@@ -343,14 +333,6 @@ function App() {
           onClick={() => setActiveTab('workouts')}
         >
           Workouts
-        </button>
-        <button
-          role="tab"
-          aria-selected={activeTab === 'build'}
-          className={`tab-btn${activeTab === 'build' ? ' active' : ''}`}
-          onClick={() => setActiveTab('build')}
-        >
-          Create
         </button>
       </nav>
 
@@ -515,14 +497,15 @@ function App() {
         <section className="panel">
           <h2>Predicted splits</h2>
           <p className="panel-intro">
-            Target splits for preset workouts and anything you've saved. Add your own on the <em>Create</em> tab.
+            Target splits for preset workouts and anything you've saved. Tap <em>+ Add workout</em> to build your own, or tap a saved card to edit it.
           </p>
           <WorkoutList
             fit={fit}
             savedWorkouts={savedWorkouts}
             shareStatuses={shareStatuses}
-            onEditWorkout={handleEditWorkout}
-            onDeleteWorkout={handleDeleteWorkout}
+            onAddWorkout={handleAddWorkout}
+            onOpenSavedWorkout={handleOpenSavedWorkout}
+            onOpenPreset={handleOpenPreset}
             onShareWorkout={handleShareWorkout}
             onReorderWorkouts={handleReorderWorkouts}
             onMoveWorkoutToEdge={handleMoveWorkoutToEdge}
@@ -530,32 +513,57 @@ function App() {
         </section>
       )}
 
-      {activeTab === 'build' && (
-        <section className="panel">
-          <div className="build-header">
-            <h2>{editingId ? 'Edit workout' : 'Create a workout'}</h2>
-            {editingId && (
-              <button className="link-button" type="button" onClick={handleNewWorkout}>
-                + New workout
-              </button>
-            )}
-          </div>
-          <p className="panel-intro">
-            Combine intervals (work + optional rest) into a workout. Target splits appear next to each segment as you type, then save it to the <em>Workouts</em> tab.
-          </p>
-          <WorkoutBuilder
+      {modal && (() => {
+        if (modal.kind === 'edit' || modal.kind === 'view-saved') {
+          const w = savedWorkouts.find((sw) => sw.id === modal.id)
+          if (!w) return null
+          return (
+            <WorkoutModal
+              key={`saved-${modal.id}`}
+              mode={modal.kind}
+              fit={fit}
+              initialName={w.name}
+              initialIntervals={readWorkoutIntervals(w) as EditableInterval[]}
+              onSave={handleBuilderSave}
+              onDelete={() => handleDeleteWorkout(modal.id)}
+              onEdit={() => setModal({ kind: 'edit', id: modal.id })}
+              onClose={() => setModal(null)}
+            />
+          )
+        }
+        if (modal.kind === 'view-preset') {
+          const preset = ALL_PRESETS.find((p) => p.id === modal.presetId)
+          if (!preset) return null
+          return (
+            <WorkoutModal
+              key={`preset-${modal.presetId}`}
+              mode="view-preset"
+              fit={fit}
+              initialName={preset.name}
+              initialIntervals={workoutToEditableIntervals(preset)}
+              onClose={() => setModal(null)}
+              onCopy={() =>
+                setModal({
+                  kind: 'create',
+                  name: `Copy of ${preset.name}`,
+                  intervals: workoutToEditableIntervals(preset),
+                })
+              }
+            />
+          )
+        }
+        return (
+          <WorkoutModal
+            key="create"
+            mode="create"
             fit={fit}
-            name={builderName}
-            segments={builderSegments}
-            onChange={(patch) => {
-              if (patch.name !== undefined) setBuilderName(patch.name)
-              if (patch.segments !== undefined) setBuilderSegments(patch.segments)
-            }}
+            initialName={modal.name}
+            initialIntervals={modal.intervals}
             onSave={handleBuilderSave}
-            saveLabel={editingId ? 'Update workout' : 'Save workout'}
+            onClose={() => setModal(null)}
           />
-        </section>
-      )}
+        )
+      })()}
 
       <footer className="app-footer">
         <p>Predictions are estimates — your own pace is the ground truth.</p>
