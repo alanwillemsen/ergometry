@@ -55,17 +55,23 @@ export function WorkoutModal({
   // - ×/backdrop/Escape/Save/Delete: call onClose() directly; cleanup pops
   //   the history entry we pushed.
   useEffect(() => {
-    // Unique key so the listener ignores stale entries from StrictMode's
-    // double-invocation: cleanup calls history.back(), which pops to the
-    // key1 entry, not to a non-modal state, so the remounted listener skips it.
-    const key = `m${Date.now()}`
+    const key = `m${Date.now()}-${Math.random().toString(36).slice(2)}`
     history.pushState({ modalKey: key }, '')
+
+    // Defer activation by one frame. Chrome (on localhost/HTTP) fires a
+    // spurious popstate synchronously on pushState; the rAF gate absorbs it.
+    // StrictMode cleanup cancels the rAF before it fires, so the remounted
+    // instance starts inactive and the back from cleanup is also ignored.
+    let active = false
+    const raf = requestAnimationFrame(() => { active = true })
+
     const handlePop = (e: PopStateEvent) => {
-      // Only close when we've navigated back to a non-modal state.
-      if (!e.state?.modalKey) onCloseRef.current()
+      if (active && !e.state?.modalKey) onCloseRef.current()
     }
     window.addEventListener('popstate', handlePop)
+
     return () => {
+      cancelAnimationFrame(raf)
       window.removeEventListener('popstate', handlePop)
       if (history.state?.modalKey === key) history.back()
     }
