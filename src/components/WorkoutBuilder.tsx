@@ -515,7 +515,10 @@ function SortableIntervalCard({
         const bandSuffix = banded ? ` @ ${iv.band}` : ''
         return (
           <div className="seg-target">
-            <div>target {formatSplit(split)}/500m{bandSuffix} · {repDetail}</div>
+            <div>
+            target <span className="seg-split-hi">{formatSplit(split)}<span className="seg-split-unit">/500m</span></span>
+            {bandSuffix} · {repDetail}
+          </div>
             {pct != null && (
               <div className="seg-battery">
                 <BatteryButton

@@ -874,6 +874,17 @@ code {
   flex-direction: column;
   gap: 8px;
 }
+.seg-split-hi {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+}
+.seg-split-unit {
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  margin-left: 1px;
+}
 .seg-bands {
   display: flex;
   flex-wrap: wrap;

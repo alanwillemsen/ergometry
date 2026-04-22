@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FittedProfile } from '../model/pacing'
 import { WorkoutBuilder, emptyInterval, ensureIntervalIds, type EditableInterval } from './WorkoutBuilder'
 
@@ -45,6 +45,33 @@ export function WorkoutModal({
 
   const isView = mode === 'view-saved' || mode === 'view-preset'
 
+  // Keep a stable ref so the popstate handler always calls the latest onClose
+  const onCloseRef = useRef(onClose)
+  useEffect(() => { onCloseRef.current = onClose })
+
+  // Push a history entry on mount so the Android/iOS back gesture dismisses
+  // the modal instead of leaving the page. All close paths go through
+  // handleClose, which pops the entry; popstate then fires onClose.
+  // Programmatic closes (Save, Delete) skip handleClose — the cleanup pops
+  // the entry they left behind.
+  useEffect(() => {
+    history.pushState({ modal: true }, '')
+    const handlePop = () => onCloseRef.current()
+    window.addEventListener('popstate', handlePop)
+    return () => {
+      window.removeEventListener('popstate', handlePop)
+      if (history.state?.modal) history.back()
+    }
+  }, [])
+
+  const handleClose = useCallback(() => {
+    if (history.state?.modal) {
+      history.back() // popstate fires → onClose
+    } else {
+      onClose()
+    }
+  }, [onClose])
+
   useEffect(() => {
     const prev = document.body.style.overflow
     document.body.style.overflow = 'hidden'
@@ -55,11 +82,11 @@ export function WorkoutModal({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') handleClose()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [handleClose])
 
   const handleDelete = () => {
     if (!onDelete) return
@@ -84,7 +111,7 @@ export function WorkoutModal({
     <div
       className="modal-backdrop"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose()
+        if (e.target === e.currentTarget) handleClose()
       }}
     >
       <div
@@ -100,7 +127,7 @@ export function WorkoutModal({
             type="button"
             className="modal-close"
             aria-label="Close"
-            onClick={onClose}
+            onClick={handleClose}
           >
             ×
           </button>
