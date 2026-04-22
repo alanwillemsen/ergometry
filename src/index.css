@@ -1100,6 +1100,9 @@ code {
   outline: 2px solid var(--accent-border);
   outline-offset: 1px;
 }
+.battery-button.is-locked {
+  margin-right: 9px;
+}
 .battery-button.is-locked .battery-bar {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent-bg);
