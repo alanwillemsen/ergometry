@@ -22,13 +22,14 @@ import { BANDS } from '../model/workouts'
 import { parseTime, formatSplit, formatDuration } from '../lib/time'
 
 export type RepKind = 'distance' | 'duration'
-export type RestKind = 'distance' | 'duration' | 'none'
 
+// Rest is encoded implicitly: empty restValue means no rest; any non-empty
+// value is parsed as a duration (m:ss). The PM5 doesn't support distance-based
+// rest, so there's no explicit kind to choose.
 export interface EditableInterval {
   id?: string
   workKind: RepKind
   workValue: string
-  restKind: RestKind
   restValue: string
   lockedWbalPercent?: number
   band?: Band
@@ -54,11 +55,10 @@ export function ensureIntervalIds(intervals: EditableInterval[]): EditableInterv
 }
 
 export function emptyInterval(): EditableInterval {
-  return { id: newIntervalId(), workKind: 'distance', workValue: '2000', restKind: 'none', restValue: '2:00' }
+  return { id: newIntervalId(), workKind: 'distance', workValue: '2000', restValue: '' }
 }
 
-function parseValue(kind: RepKind | 'none', raw: string): number {
-  if (kind === 'none') return 0
+function parseValue(kind: RepKind, raw: string): number {
   if (kind === 'distance') {
     const n = Number(raw)
     return isFinite(n) && n > 0 ? n : NaN
@@ -71,14 +71,8 @@ export function workoutToEditableIntervals(workout: Workout): EditableInterval[]
     const workKind: RepKind = iv.work.kind
     const workValue =
       iv.work.kind === 'distance' ? String(iv.work.meters) : formatDuration(iv.work.seconds)
-    const restKind: RestKind = iv.rest.kind
-    const restValue =
-      iv.rest.kind === 'distance'
-        ? String(iv.rest.meters)
-        : iv.rest.kind === 'duration'
-          ? formatDuration(iv.rest.seconds)
-          : '2:00'
-    const e: EditableInterval = { id: newIntervalId(), workKind, workValue, restKind, restValue }
+    const restValue = iv.rest.kind === 'duration' ? formatDuration(iv.rest.seconds) : ''
+    const e: EditableInterval = { id: newIntervalId(), workKind, workValue, restValue }
     if (iv.band) e.band = iv.band
     if (typeof iv.lockedWbalPercent === 'number') e.lockedWbalPercent = iv.lockedWbalPercent
     return e
@@ -95,14 +89,13 @@ export function buildWorkoutFromIntervals(name: string, intervals: EditableInter
         ? { kind: 'distance' as const, meters: workVal }
         : { kind: 'duration' as const, seconds: workVal }
     let rest: WorkoutInterval['rest']
-    if (s.restKind === 'none') rest = { kind: 'none' }
-    else {
-      const restVal = parseValue(s.restKind, s.restValue)
+    const restRaw = s.restValue.trim()
+    if (restRaw === '') {
+      rest = { kind: 'none' }
+    } else {
+      const restVal = parseTime(restRaw)
       if (!isFinite(restVal) || restVal <= 0) return null
-      rest =
-        s.restKind === 'distance'
-          ? { kind: 'distance', meters: restVal }
-          : { kind: 'duration', seconds: restVal }
+      rest = { kind: 'duration', seconds: restVal }
     }
     const iv: WorkoutInterval = { work, rest }
     if (s.band) iv.band = s.band
@@ -111,6 +104,8 @@ export function buildWorkoutFromIntervals(name: string, intervals: EditableInter
   }
   return { id: 'custom', name: name || 'Custom workout', intervals: built }
 }
+
+// ── WorkoutBuilder ────────────────────────────────────────────────────────────
 
 export interface WorkoutBuilderProps {
   fit: FittedProfile | null
@@ -146,10 +141,13 @@ export function WorkoutBuilder({ fit, name, intervals, onChange, readOnly = fals
   const workout = useMemo(() => buildWorkoutFromIntervals(name, intervals), [name, intervals])
   const buildError = useMemo(() => {
     if (workout) return null
-    const hasZeroRest = intervals.some(
-      s => s.restKind !== 'none' && parseValue(s.restKind, s.restValue) === 0
-    )
-    if (hasZeroRest) return 'Rest cannot be 0 — enter a rest duration or switch to "none".'
+    const hasBadRest = intervals.some((s) => {
+      const raw = s.restValue.trim()
+      if (raw === '') return false
+      const v = parseTime(raw)
+      return !isFinite(v) || v <= 0
+    })
+    if (hasBadRest) return 'Invalid rest duration — enter m:ss or leave blank for no rest.'
     return 'Fix the inputs above to see a prediction.'
   }, [workout, intervals])
   const prediction = useMemo(() => {
@@ -251,15 +249,16 @@ export function WorkoutBuilder({ fit, name, intervals, onChange, readOnly = fals
 
   return (
     <div className={`builder${readOnly ? ' is-readonly' : ''}`}>
-      <label className="field">
-        <span>Name</span>
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => onChange({ name: e.target.value })}
-          disabled={readOnly}
-        />
-      </label>
+      {!readOnly && (
+        <label className="field">
+          <span>Name</span>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => onChange({ name: e.target.value })}
+          />
+        </label>
+      )}
 
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
@@ -482,40 +481,13 @@ function SortableIntervalCard({
         </label>
         <label className="seg-rest">
           <span>Rest</span>
-          <div className="inline">
-            <input
-              type="text"
-              value={iv.restKind === 'none' ? '' : iv.restValue}
-              onChange={(e) => setInt(i, { restValue: e.target.value })}
-              placeholder={
-                iv.restKind === 'none'
-                  ? ''
-                  : iv.restKind === 'distance'
-                    ? 'meters'
-                    : 'm:ss'
-              }
-              disabled={readOnly || iv.restKind === 'none'}
-            />
-            <select
-              value={iv.restKind}
-              onChange={(e) =>
-                setInt(i, {
-                  restKind: e.target.value as RestKind,
-                  restValue:
-                    e.target.value === 'distance'
-                      ? '500'
-                      : e.target.value === 'duration'
-                        ? '2:00'
-                        : iv.restValue,
-                })
-              }
-              disabled={readOnly}
-            >
-              <option value="duration">time</option>
-              <option value="distance">meters</option>
-              <option value="none">none</option>
-            </select>
-          </div>
+          <input
+            type="text"
+            value={iv.restValue}
+            onChange={(e) => setInt(i, { restValue: e.target.value })}
+            placeholder="m:ss (blank = none)"
+            disabled={readOnly}
+          />
         </label>
       </div>
       {(() => {

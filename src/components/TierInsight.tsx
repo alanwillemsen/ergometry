@@ -42,8 +42,7 @@ export function TierInsight({
             <span className="insight-label">Sprint reserve</span>
             <code>{(fit.wPrimeJoules / 1000).toFixed(1)} kJ</code>
             <span className="insight-note">
-              extra anaerobic energy for going above sustainable pace (
-              <code>W′</code>)
+              your anaerobic battery — extra energy for going above sustainable pace
             </span>
           </div>
           {!sixKProvided && (

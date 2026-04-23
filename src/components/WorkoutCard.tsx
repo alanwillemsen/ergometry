@@ -9,9 +9,7 @@ function sameRep(a: Rep, b: Rep): boolean {
 function sameRest(a: Rest, b: Rest): boolean {
   if (a.kind !== b.kind) return false
   if (a.kind === 'none') return true
-  return a.kind === 'distance'
-    ? a.meters === (b as typeof a).meters
-    : a.seconds === (b as typeof a).seconds
+  return a.seconds === (b as typeof a).seconds
 }
 function sameInterval(a: WorkoutInterval, b: WorkoutInterval): boolean {
   return sameRep(a.work, b.work) && sameRest(a.rest, b.rest)
@@ -59,9 +57,7 @@ function repTargets(intervals: WorkoutInterval[], prediction: WorkoutPrediction,
       const splitStr = formatSplit(prediction.perIntervalSplitsSeconds[g.startIdx])
       const prefix = g.count > 1 ? `${g.count} \u00d7 ` : ''
       const restStr =
-        g.interval.rest.kind === 'duration' ? `, ${formatDuration(g.interval.rest.seconds)}r`
-        : g.interval.rest.kind === 'distance' ? `, ${g.interval.rest.meters}m r`
-        : ''
+        g.interval.rest.kind === 'duration' ? `, ${formatDuration(g.interval.rest.seconds)}r` : ''
       if (g.interval.work.kind === 'distance') {
         parts.push(`${prefix}${g.interval.work.meters}m @ ${splitStr}${restStr}`)
       } else {

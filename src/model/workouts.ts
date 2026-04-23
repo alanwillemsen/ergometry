@@ -2,8 +2,9 @@ export type Rep =
   | { kind: 'distance'; meters: number }
   | { kind: 'duration'; seconds: number }
 
+// The PM5 only supports time-based or no rest; distance-based rest isn't a
+// real option on the hardware.
 export type Rest =
-  | { kind: 'distance'; meters: number }
   | { kind: 'duration'; seconds: number }
   | { kind: 'none' }
 

@@ -46,7 +46,10 @@ export function buildShareUrl(state: Partial<PersistedState>): string {
 // Recipients apply their own 2K time and tier for predictions.
 export function buildWorkoutShareUrl(w: { name: string; intervals: unknown }): string {
   const base = `${location.origin}${location.pathname}`
-  return `${base}#wkt.v1.${b64urlEncode(JSON.stringify(w))}`
+  const intervals = Array.isArray(w.intervals)
+    ? w.intervals.map(({ id: _id, ...rest }: Record<string, unknown>) => rest)
+    : w.intervals
+  return `${base}#wkt.v1.${b64urlEncode(JSON.stringify({ name: w.name, intervals }))}`
 }
 
 export function readHashWorkout(): { name: string; intervals: unknown[] } | null {

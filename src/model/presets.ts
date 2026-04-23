@@ -11,12 +11,10 @@ function mkWork(r: { distance?: number; duration?: number }): WorkoutInterval['w
     : { kind: 'duration', seconds: r.duration! }
 }
 
-function mkRest(r: { distance?: number; duration?: number }): WorkoutInterval['rest'] {
-  return r.distance
-    ? { kind: 'distance', meters: r.distance }
-    : r.duration !== undefined
-      ? { kind: 'duration', seconds: r.duration }
-      : { kind: 'none' }
+function mkRest(r: { duration?: number }): WorkoutInterval['rest'] {
+  return r.duration !== undefined
+    ? { kind: 'duration', seconds: r.duration }
+    : { kind: 'none' }
 }
 
 const test = (id: string, name: string, rep: { distance?: number; duration?: number }): Workout => ({
@@ -30,7 +28,7 @@ const interval = (
   name: string,
   count: number,
   work: { distance?: number; duration?: number },
-  rest: { distance?: number; duration?: number },
+  rest: { duration?: number },
   band?: Band,
 ): Workout => {
   const one: WorkoutInterval = { work: mkWork(work), rest: mkRest(rest), ...(band ? { band } : {}) }
@@ -91,7 +89,7 @@ export const PRESET_GROUPS: PresetGroup[] = [
       interval('18x1-1', "18 × (1′ on / 1′ off)", 18, { duration: 60 }, { duration: 60 }),
       interval('20x40-20', "20 × (40″ on / 20″ off)", 20, { duration: 40 }, { duration: 20 }),
       interval('8x30-30', "8 × (30″ on / 30″ off)", 8, { duration: 30 }, { duration: 30 }),
-      interval('20x100-200', '20 × (100m on / 200m off)', 20, { distance: 100 }, { distance: 200 }),
+      interval('20x100-50', '20 × 100m / 50″r', 20, { distance: 100 }, { duration: 50 }),
     ],
   },
 ]

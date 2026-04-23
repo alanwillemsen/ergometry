@@ -72,15 +72,8 @@ function expandPhases(
 
     const isLast = i === workout.intervals.length - 1
     if (!isLast && interval.rest.kind !== 'none') {
-      let restSec: number
-      let restMeters: number
-      if (interval.rest.kind === 'distance') {
-        restMeters = interval.rest.meters
-        restSec = (restMeters * restSplit) / 500
-      } else {
-        restSec = interval.rest.seconds
-        restMeters = (500 * restSec) / restSplit
-      }
+      const restSec = interval.rest.seconds
+      const restMeters = (500 * restSec) / restSplit
       phases.push({ power: restPower, seconds: restSec, meters: restMeters, isWork: false })
     }
   }
@@ -288,10 +281,7 @@ function applyRestPhase(
   restPower: number,
 ): number {
   if (interval.rest.kind === 'none') return startWbal
-  const restSec =
-    interval.rest.kind === 'distance'
-      ? (interval.rest.meters * splitFromPower(Math.max(restPower, 1))) / 500
-      : interval.rest.seconds
+  const restSec = interval.rest.seconds
   if (restSec <= 0) return startWbal
   let wbal = startWbal
   const nSteps = Math.max(1, Math.ceil(restSec))

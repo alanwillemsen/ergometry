@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fitProfile, type AthleteProfile } from './model/pacing'
 import { TIER_DEFS, type Tier } from './model/tiers'
 import { parseTime, formatTime, formatSplit } from './lib/time'
 import { TierInsight } from './components/TierInsight'
 import { WorkoutList } from './components/WorkoutList'
 import { type EditableInterval, workoutToEditableIntervals } from './components/WorkoutBuilder'
-import { WorkoutModal } from './components/WorkoutModal'
+import { WorkoutView } from './components/WorkoutView'
+import { usePM5 } from './lib/pm5State'
 import { ALL_PRESETS } from './model/presets'
 import {
   loadState,
@@ -20,7 +21,7 @@ const ALL_TIERS: Tier[] = ['world-class', 'competitive', 'recreational', 'custom
 
 type CustomMode = 'slider' | 'scores'
 type Tab = 'profile' | 'workouts'
-type ModalState =
+type ViewState =
   | { kind: 'create'; name?: string; intervals?: EditableInterval[] }
   | { kind: 'edit'; id: string }
   | { kind: 'view-saved'; id: string }
@@ -124,7 +125,46 @@ function App() {
   const [activeTab, setActiveTab] = useState<Tab>(() =>
     isFirstTimeLike(loadState()) ? 'profile' : 'workouts',
   )
-  const [modal, setModal] = useState<ModalState>(null)
+  const [view, setViewRaw] = useState<ViewState>(null)
+  const viewKeyRef = useRef<string | null>(null)
+  const popGuardRef = useRef(false)
+  const pm5 = usePM5()
+
+  // setView wraps the raw setter with history-stack management. Only the
+  // first transition from null→view pushes a history entry; subsequent mode
+  // changes (e.g. view-saved → edit) reuse the same entry. Closing the view
+  // pops the entry so the URL/history match the visible state, and a
+  // hardware back-button (popstate) closes the view without double-popping.
+  const setView = useCallback((next: ViewState) => {
+    const wasOpen = viewKeyRef.current !== null
+    if (next !== null && !wasOpen) {
+      const key = `v${Date.now()}-${Math.random().toString(36).slice(2)}`
+      viewKeyRef.current = key
+      history.pushState({ viewKey: key }, '')
+      // Chrome on localhost fires a synchronous popstate on pushState. Suppress
+      // it for one frame so the listener doesn't immediately close us.
+      popGuardRef.current = true
+      requestAnimationFrame(() => { popGuardRef.current = false })
+    } else if (next === null && wasOpen) {
+      if (history.state?.viewKey === viewKeyRef.current) {
+        history.back()
+      }
+      viewKeyRef.current = null
+    }
+    setViewRaw(next)
+  }, [])
+
+  useEffect(() => {
+    const handlePop = (e: PopStateEvent) => {
+      if (popGuardRef.current) return
+      if (!e.state?.viewKey) {
+        viewKeyRef.current = null
+        setViewRaw(null)
+      }
+    }
+    window.addEventListener('popstate', handlePop)
+    return () => window.removeEventListener('popstate', handlePop)
+  }, [])
   const [profileShareStatus, setProfileShareStatus] = useState<'' | 'copied' | 'error'>('')
   const [sharedWorkout, setSharedWorkout] = useState<{ name: string; intervals: EditableInterval[] } | null>(() => {
     const w = readHashWorkout()
@@ -199,20 +239,20 @@ function App() {
 
   // Workout list actions
   const handleAddWorkout = () => {
-    setModal({ kind: 'create' })
+    setView({ kind: 'create' })
   }
 
   const handleOpenSavedWorkout = (id: string) => {
-    setModal({ kind: 'view-saved', id })
+    setView({ kind: 'view-saved', id })
   }
 
   const handleOpenPreset = (id: string) => {
-    setModal({ kind: 'view-preset', presetId: id })
+    setView({ kind: 'view-preset', presetId: id })
   }
 
   const handleDeleteWorkout = (id: string) => {
     setSavedWorkouts((prev) => prev.filter((w) => w.id !== id))
-    setModal(null)
+    setView(null)
   }
 
   const handleMoveWorkoutToEdge = (id: string, edge: 'top' | 'bottom') => {
@@ -253,18 +293,18 @@ function App() {
   const handleBuilderSave = (name: string, intervals: EditableInterval[]) => {
     const normalized = intervals.length > 0
       ? intervals.map((iv, idx) =>
-          idx === intervals.length - 1 && iv.restKind !== 'none'
-            ? { ...iv, restKind: 'none' as const }
+          idx === intervals.length - 1 && iv.restValue !== ''
+            ? { ...iv, restValue: '' }
             : iv,
         )
       : intervals
-    if (modal?.kind === 'edit') {
-      const id = modal.id
+    if (view?.kind === 'edit') {
+      const id = view.id
       setSavedWorkouts((prev) => prev.map((w) => w.id === id ? { ...w, name, intervals: normalized } : w))
     } else {
       setSavedWorkouts((prev) => [{ id: generateId(), name, intervals: normalized }, ...prev])
     }
-    setModal(null)
+    setView(null)
   }
 
   // Shared workout received via link
@@ -275,6 +315,64 @@ function App() {
     setActiveTab('workouts')
   }
 
+  const renderView = () => {
+    if (!view) return null
+    if (view.kind === 'edit' || view.kind === 'view-saved') {
+      const w = savedWorkouts.find((sw) => sw.id === view.id)
+      if (!w) return null
+      const id = view.id
+      const kind = view.kind
+      return (
+        <WorkoutView
+          key={`saved-${id}`}
+          mode={kind}
+          fit={fit}
+          pm5={pm5}
+          initialName={w.name}
+          initialIntervals={readWorkoutIntervals(w) as EditableInterval[]}
+          onSave={handleBuilderSave}
+          onDelete={() => handleDeleteWorkout(id)}
+          onEdit={() => setView({ kind: 'edit', id })}
+          onClose={() => setView(null)}
+        />
+      )
+    }
+    if (view.kind === 'view-preset') {
+      const preset = ALL_PRESETS.find((p) => p.id === view.presetId)
+      if (!preset) return null
+      return (
+        <WorkoutView
+          key={`preset-${view.presetId}`}
+          mode="view-preset"
+          fit={fit}
+          pm5={pm5}
+          initialName={preset.name}
+          initialIntervals={workoutToEditableIntervals(preset)}
+          onClose={() => setView(null)}
+          onCopy={() =>
+            setView({
+              kind: 'create',
+              name: `Copy of ${preset.name}`,
+              intervals: workoutToEditableIntervals(preset),
+            })
+          }
+        />
+      )
+    }
+    return (
+      <WorkoutView
+        key="create"
+        mode="create"
+        fit={fit}
+        pm5={pm5}
+        initialName={view.name}
+        initialIntervals={view.intervals}
+        onSave={handleBuilderSave}
+        onClose={() => setView(null)}
+      />
+    )
+  }
+
   return (
     <div className="app">
       <header className="app-header">
@@ -282,6 +380,7 @@ function App() {
         <p>Predict splits for any erg workout.</p>
       </header>
 
+      {view ? renderView() : (<>
       <details
         className="how-it-works"
         open={helpOpen}
@@ -512,58 +611,7 @@ function App() {
           />
         </section>
       )}
-
-      {modal && (() => {
-        if (modal.kind === 'edit' || modal.kind === 'view-saved') {
-          const w = savedWorkouts.find((sw) => sw.id === modal.id)
-          if (!w) return null
-          return (
-            <WorkoutModal
-              key={`saved-${modal.id}`}
-              mode={modal.kind}
-              fit={fit}
-              initialName={w.name}
-              initialIntervals={readWorkoutIntervals(w) as EditableInterval[]}
-              onSave={handleBuilderSave}
-              onDelete={() => handleDeleteWorkout(modal.id)}
-              onEdit={() => setModal({ kind: 'edit', id: modal.id })}
-              onClose={() => setModal(null)}
-            />
-          )
-        }
-        if (modal.kind === 'view-preset') {
-          const preset = ALL_PRESETS.find((p) => p.id === modal.presetId)
-          if (!preset) return null
-          return (
-            <WorkoutModal
-              key={`preset-${modal.presetId}`}
-              mode="view-preset"
-              fit={fit}
-              initialName={preset.name}
-              initialIntervals={workoutToEditableIntervals(preset)}
-              onClose={() => setModal(null)}
-              onCopy={() =>
-                setModal({
-                  kind: 'create',
-                  name: `Copy of ${preset.name}`,
-                  intervals: workoutToEditableIntervals(preset),
-                })
-              }
-            />
-          )
-        }
-        return (
-          <WorkoutModal
-            key="create"
-            mode="create"
-            fit={fit}
-            initialName={modal.name}
-            initialIntervals={modal.intervals}
-            onSave={handleBuilderSave}
-            onClose={() => setModal(null)}
-          />
-        )
-      })()}
+      </>)}
 
       <footer className="app-footer">
         <p>Predictions are estimates — your own pace is the ground truth.</p>
