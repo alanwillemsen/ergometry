@@ -1,81 +1,47 @@
 import { forwardRef, useEffect, useRef, useState, type CSSProperties, type HTMLAttributes, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import type { Workout, WorkoutPrediction, WorkoutInterval, Rep, Rest } from '../model/workouts'
+import type { Workout, WorkoutPrediction, WorkoutInterval } from '../model/workouts'
 import { formatSplit, formatDuration } from '../lib/time'
+import { groupIntervals, type IntervalGroup } from '../model/cardGrouping'
 
-function sameRep(a: Rep, b: Rep): boolean {
-  if (a.kind !== b.kind) return false
-  return a.kind === 'distance' ? a.meters === (b as typeof a).meters : a.seconds === (b as typeof a).seconds
-}
-function sameRest(a: Rest, b: Rest): boolean {
-  if (a.kind !== b.kind) return false
-  if (a.kind === 'none') return true
-  return a.seconds === (b as typeof a).seconds
-}
-function sameInterval(a: WorkoutInterval, b: WorkoutInterval): boolean {
-  return sameRep(a.work, b.work) && sameRest(a.rest, b.rest)
-}
+const MAX_REP_LINES = 4
 
-interface IntervalGroup {
-  count: number
-  interval: WorkoutInterval
-  startIdx: number
-}
-function groupIntervals(intervals: WorkoutInterval[]): IntervalGroup[] {
-  const groups: IntervalGroup[] = []
-  for (let i = 0; i < intervals.length; i++) {
-    const prev = groups[groups.length - 1]
-    if (prev && sameInterval(prev.interval, intervals[i])) {
-      prev.count++
-    } else {
-      groups.push({ count: 1, interval: intervals[i], startIdx: i })
-    }
-  }
-  // Rest on the final interval is dropped on save (nothing follows it), which
-  // would otherwise split "4 × 10' w/ 2'r" into a 3-group + a lone 1-group.
-  // Coalesce that trailing bare rep back into the preceding group for display.
-  if (groups.length >= 2) {
-    const last = groups[groups.length - 1]
-    const prev = groups[groups.length - 2]
-    if (
-      last.count === 1 &&
-      last.interval.rest.kind === 'none' &&
-      prev.interval.rest.kind !== 'none' &&
-      sameRep(prev.interval.work, last.interval.work)
-    ) {
-      prev.count += 1
-      groups.pop()
-    }
-  }
-  return groups
+function formatOwnedGroup(g: IntervalGroup, prediction: WorkoutPrediction): string {
+  const splitStr = formatSplit(prediction.perIntervalSplitsSeconds[g.startIdx])
+  const prefix = g.count > 1 ? `${g.count} × ` : ''
+  const restStr =
+    g.interval.rest.kind === 'duration' ? `, ${formatDuration(g.interval.rest.seconds)}r` : ''
+  const work =
+    g.interval.work.kind === 'distance'
+      ? `${g.interval.work.meters}m`
+      : formatDuration(g.interval.work.seconds)
+  return `${prefix}${work} @ ${splitStr}${restStr}`
 }
 
-function repTargets(intervals: WorkoutInterval[], prediction: WorkoutPrediction, isOwned: boolean): string[] {
+function repLines(
+  intervals: WorkoutInterval[],
+  prediction: WorkoutPrediction,
+  isOwned: boolean,
+): string[] {
   const groups = groupIntervals(intervals)
-  const parts: string[] = []
-  if (isOwned) {
-    for (const g of groups) {
-      const splitStr = formatSplit(prediction.perIntervalSplitsSeconds[g.startIdx])
-      const prefix = g.count > 1 ? `${g.count} \u00d7 ` : ''
-      const restStr =
-        g.interval.rest.kind === 'duration' ? `, ${formatDuration(g.interval.rest.seconds)}r` : ''
-      if (g.interval.work.kind === 'distance') {
-        parts.push(`${prefix}${g.interval.work.meters}m @ ${splitStr}${restStr}`)
-      } else {
-        parts.push(`${prefix}${formatDuration(g.interval.work.seconds)} @ ${splitStr}${restStr}`)
-      }
-    }
-  } else {
+  if (!isOwned) {
+    // Saved tests are continuous; retain the existing aggregate-meters phrasing.
     const splitSeconds = prediction.avgSplitSeconds
+    const out: string[] = []
     for (const g of groups) {
       if (g.interval.work.kind === 'distance') {
         if (g.count === 1) continue
-        parts.push(`${g.count} \u00d7 ${g.interval.work.meters}m in ${formatDuration((g.interval.work.meters * splitSeconds) / 500)}`)
+        out.push(
+          `${g.count} × ${g.interval.work.meters}m in ${formatDuration((g.interval.work.meters * splitSeconds) / 500)}`,
+        )
       } else {
-        parts.push(`${g.count} \u00d7 ${formatDuration(g.interval.work.seconds)} \u2248 ${((500 * g.interval.work.seconds) / splitSeconds).toFixed(0)}m`)
+        out.push(
+          `${g.count} × ${formatDuration(g.interval.work.seconds)} ≈ ${((500 * g.interval.work.seconds) / splitSeconds).toFixed(0)}m`,
+        )
       }
     }
+    return out
   }
-  return parts
+  return groups.map((g) => formatOwnedGroup(g, prediction))
 }
 
 type DragHandleProps = HTMLAttributes<HTMLButtonElement>
@@ -110,7 +76,9 @@ export const WorkoutCard = forwardRef<HTMLElement, WorkoutCardProps>(function Wo
   },
   ref,
 ) {
-  const reps = prediction ? repTargets(workout.intervals, prediction, !!isOwned) : []
+  const lines = prediction ? repLines(workout.intervals, prediction, !!isOwned) : []
+  const visible = lines.slice(0, MAX_REP_LINES)
+  const overflow = lines.length - visible.length
   const hasMenu = !!(onShare || onMoveTop || onMoveBottom)
   const clickable = !!onOpen
 
@@ -172,7 +140,13 @@ export const WorkoutCard = forwardRef<HTMLElement, WorkoutCardProps>(function Wo
           <div className="card-meta">
             {formatDuration(prediction.totalWorkSeconds)} work · {prediction.totalMeters.toFixed(0)}m
           </div>
-          {reps.map((line, i) => <div key={i} className="card-reps">{line}</div>)}
+          {visible.map((line, i) => {
+            const isFade = overflow > 0 && i === visible.length - 1
+            return (
+              <div key={i} className={`card-reps${isFade ? ' is-fade' : ''}`}>{line}</div>
+            )
+          })}
+          {overflow > 0 && <div className="card-reps card-more">+{overflow} more</div>}
         </>
       ) : (
         <div className="card-split">—</div>

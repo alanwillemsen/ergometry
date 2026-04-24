@@ -7,6 +7,8 @@ import { WorkoutList } from './components/WorkoutList'
 import { type EditableInterval, workoutToEditableIntervals } from './components/WorkoutBuilder'
 import { WorkoutView } from './components/WorkoutView'
 import { usePM5 } from './lib/pm5State'
+import { useConcept2 } from './lib/concept2State'
+import { Concept2Link } from './components/Concept2Link'
 import { ALL_PRESETS } from './model/presets'
 import {
   loadState,
@@ -129,6 +131,7 @@ function App() {
   const viewKeyRef = useRef<string | null>(null)
   const popGuardRef = useRef(false)
   const pm5 = usePM5()
+  const concept2 = useConcept2()
 
   // setView wraps the raw setter with history-stack management. Only the
   // first transition from null→view pushes a history entry; subsequent mode
@@ -287,22 +290,12 @@ function App() {
     setTimeout(() => setShareStatuses((prev) => { const n = { ...prev }; delete n[id]; return n }), 2000)
   }
 
-  // Builder save — rest on the last interval is meaningless (nothing follows)
-  // so drop it before persisting. The card renderer re-coalesces that trailing
-  // bare rep with the preceding group so "4 × 10' w/ 2'r" still displays intact.
   const handleBuilderSave = (name: string, intervals: EditableInterval[]) => {
-    const normalized = intervals.length > 0
-      ? intervals.map((iv, idx) =>
-          idx === intervals.length - 1 && iv.restValue !== ''
-            ? { ...iv, restValue: '' }
-            : iv,
-        )
-      : intervals
     if (view?.kind === 'edit') {
       const id = view.id
-      setSavedWorkouts((prev) => prev.map((w) => w.id === id ? { ...w, name, intervals: normalized } : w))
+      setSavedWorkouts((prev) => prev.map((w) => w.id === id ? { ...w, name, intervals } : w))
     } else {
-      setSavedWorkouts((prev) => [{ id: generateId(), name, intervals: normalized }, ...prev])
+      setSavedWorkouts((prev) => [{ id: generateId(), name, intervals }, ...prev])
     }
     setView(null)
   }
@@ -328,6 +321,7 @@ function App() {
           mode={kind}
           fit={fit}
           pm5={pm5}
+          concept2={concept2}
           initialName={w.name}
           initialIntervals={readWorkoutIntervals(w) as EditableInterval[]}
           onSave={handleBuilderSave}
@@ -346,6 +340,7 @@ function App() {
           mode="view-preset"
           fit={fit}
           pm5={pm5}
+          concept2={concept2}
           initialName={preset.name}
           initialIntervals={workoutToEditableIntervals(preset)}
           onClose={() => setView(null)}
@@ -365,6 +360,7 @@ function App() {
         mode="create"
         fit={fit}
         pm5={pm5}
+        concept2={concept2}
         initialName={view.name}
         initialIntervals={view.intervals}
         onSave={handleBuilderSave}
@@ -585,6 +581,8 @@ function App() {
 
           {!profile && <p className="error">Enter a plausible 2K time (5:00–15:00).</p>}
           {fit && <TierInsight fit={fit} sixKProvided={profile?.sixKSeconds !== undefined} />}
+
+          <Concept2Link concept2={concept2} />
 
           <button className="share-button" type="button" onClick={handleProfileShare}>
             {profileShareStatus === 'copied' ? 'link copied ✓' : profileShareStatus === 'error' ? 'copy failed' : 'Share profile'}

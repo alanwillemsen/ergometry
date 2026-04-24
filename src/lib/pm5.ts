@@ -8,12 +8,19 @@ import type { Workout, WorkoutInterval, Rest } from '../model/workouts'
 const PM_CONTROL_SERVICE = 'ce060020-43e5-11e4-916c-0800200c9a66'
 const PM_ROWING_SERVICE  = 'ce060030-43e5-11e4-916c-0800200c9a66'
 
-// Rowing-service characteristic we subscribe to for the live display.
+// Rowing-service characteristics:
 //   0x0031 General Status — elapsed time/distance, workout/rowing/stroke state,
-//   fired every ~500 ms. We derive the current interval index from state
-//   transitions here; 0x0038 (Split/Interval Data) only fires at boundaries
-//   and is not useful for continuous "interval X of Y" tracking.
+//     fired every ~500 ms. We derive the current interval index from state
+//     transitions here; 0x0037 (Split/Interval Data) only fires at boundaries
+//     and is not useful for continuous "interval X of Y" tracking.
+//   0x0035 Stroke Data — fires at the end of every stroke (~30/min at race
+//     pace). Provides the per-stroke timeline that drives the Logbook pace
+//     graph for ErgData-style detailed uploads.
+//   0x0037 Split/Interval Data — fires once per split or interval boundary.
+//     Provides per-interval distance/time/SPM for the Logbook intervals table.
 const ROW_GENERAL_STATUS_UUID = 'ce060031-43e5-11e4-916c-0800200c9a66'
+const ROW_STROKE_DATA_UUID    = 'ce060035-43e5-11e4-916c-0800200c9a66'
+const ROW_SPLIT_DATA_UUID     = 'ce060037-43e5-11e4-916c-0800200c9a66'
 
 // ── CSAFE frame constants ─────────────────────────────────────────────────────
 // Bytes in 0xF0..0xF3 are reserved as frame delimiters; any occurrence inside
@@ -255,6 +262,10 @@ export interface PM5Telemetry {
   workoutState: number
   rowingState: number
   strokeState: number
+  // True once the PM has entered a terminal workout state at least once.
+  // Sticky — subsequent non-terminal states do not clear it, so a button
+  // that appears at end-of-workout doesn't blink away on the next poll.
+  isEnded: boolean
 }
 
 // Concept2 PM workout-state values we care about for interval tracking.
@@ -262,10 +273,101 @@ export interface PM5Telemetry {
 // into one of these marks the start of a new interval's work phase.
 const WORK_STATES = new Set([4, 5])
 
+// Terminal PM workout states. 10 = WORKOUTEND, 11 = TERMINATE,
+// 12 = WORKOUTLOGGED. Once seen, we freeze the last non-terminal totals as
+// the official result — entering WORKOUTEND typically keeps elapsed/meters
+// at their final values but we latch to be safe.
+const END_STATES = new Set([10, 11, 12])
+
+// Exported so UIs can name states without re-declaring the enum.
+export const PM5_WORKOUT_STATE = {
+  WORKOUTEND: 10,
+  TERMINATE: 11,
+  WORKOUTLOGGED: 12,
+} as const
+
 export type PM5TelemetryListener = (t: PM5Telemetry) => void
 
 function read24LE(v: DataView, off: number): number {
   return v.getUint8(off) | (v.getUint8(off + 1) << 8) | (v.getUint8(off + 2) << 16)
+}
+
+// One stroke as reported by 0x0035 Stroke Data. Fields are converted from
+// PM5's raw fixed-point units to friendlier seconds/meters/joules; SPM and
+// pace are derivable per-stroke from drive+recovery time.
+//
+// elapsedSeconds/distanceMeters are per-interval (reset at each interval
+// boundary) — matches how ErgData serializes stroke_data so Logbook can
+// group strokes into intervals by detecting t/d resets. intervalIndex is
+// the 0-based count of interval boundaries seen before this stroke.
+export interface PM5StrokeRecord {
+  elapsedSeconds: number
+  distanceMeters: number
+  intervalIndex: number
+  driveTimeSec: number
+  recoveryTimeSec: number
+  strokeDistanceMeters: number
+  workPerStrokeJoules: number
+  strokeCount: number
+}
+
+// One split or interval boundary as reported by 0x0037 Split/Interval Data.
+// "splitNumber" is the 0-based index of the split that just ended, per the
+// PM5 spec; for variable-interval workouts this is the interval index.
+export interface PM5SplitRecord {
+  elapsedSeconds: number
+  distanceMeters: number
+  splitTimeSec: number
+  splitDistanceMeters: number
+  splitRestTimeSec: number
+  splitRestDistanceMeters: number
+  avgStrokeRate: number
+  splitNumber: number
+}
+
+// Parses just the raw per-interval fields. intervalIndex is assigned by the
+// caller based on boundary-reset detection, since a single packet can't know
+// which interval it belongs to.
+type ParsedStroke = Omit<PM5StrokeRecord, 'intervalIndex'>
+
+function parseStrokeRecord(v: DataView): ParsedStroke | null {
+  // Spec says 20 bytes; tolerate slightly shorter frames as long as we have
+  // the fields we use (through workPerStroke at offset 17). strokeCount is
+  // at 18-19 — fall back to 0 if missing.
+  if (v.byteLength < 18) return null
+  return {
+    elapsedSeconds:       read24LE(v, 0) * 0.01,
+    distanceMeters:       read24LE(v, 3) * 0.1,
+    // Byte 6 = drive length, skipped (we don't surface it).
+    driveTimeSec:         v.getUint8(7) * 0.01,
+    recoveryTimeSec:      v.getUint16(8, true) * 0.01,
+    strokeDistanceMeters: v.getUint16(10, true) * 0.01,
+    // Bytes 12-15 = peak/avg drive force, skipped.
+    workPerStrokeJoules:  v.getUint16(16, true) * 0.1,
+    strokeCount:          v.byteLength >= 20 ? v.getUint16(18, true) : 0,
+  }
+}
+
+function parseSplitRecord(v: DataView): PM5SplitRecord | null {
+  if (v.byteLength < 18) return null
+  // 0x0037 mixes *three* different time scales within the same packet — none
+  // of this is hinted at by the spec, all confirmed from Logbook output:
+  //   bytes 0-2   (elapsed time)    — 0.01s, matches General Status
+  //   bytes 3-5   (cum distance)    — 0.1m,  matches General Status
+  //   bytes 6-8   (split time)      — 0.1s
+  //   bytes 9-11  (split distance)  — 1m
+  //   bytes 12-13 (rest time)       — 1s  ← whole seconds
+  //   bytes 14-15 (rest distance)   — 1m
+  return {
+    elapsedSeconds:           read24LE(v, 0) * 0.01,
+    distanceMeters:           read24LE(v, 3) * 0.1,
+    splitTimeSec:             read24LE(v, 6) * 0.1,
+    splitDistanceMeters:      read24LE(v, 9),
+    splitRestTimeSec:         v.getUint16(12, true),
+    splitRestDistanceMeters:  v.getUint16(14, true),
+    avgStrokeRate:            v.getUint8(16),
+    splitNumber:              v.getUint8(17),
+  }
 }
 
 // ── Minimal Web Bluetooth types (not in this project's lib scope) ─────────────
@@ -325,6 +427,19 @@ export interface PM5Connection {
   getTelemetry(): PM5Telemetry | null
   // Subscribe to telemetry updates. Returns an unsubscribe function.
   onTelemetry(fn: PM5TelemetryListener): () => void
+  // Per-stroke records captured since the last resetTelemetry. Empty if the
+  // stroke-data characteristic was unavailable or no strokes have fired.
+  // Returns a snapshot — safe to mutate.
+  getStrokes(): PM5StrokeRecord[]
+  // Per-split/interval records, in the order they fired.
+  getSplits(): PM5SplitRecord[]
+  // Drop cumulative state (epoch bases, last-raw values, interval count,
+  // ended-sticky, strokes/splits) so the next notification starts a fresh
+  // workout from zero. Called by sendWorkout; the accumulator lives in the
+  // long-lived connection closure, so without this the PM reporting
+  // rawElapsed=0 after reprogramming would be treated as an interval reset
+  // and bank the prior workout's total into elapsedEpochBase.
+  resetTelemetry(): void
 }
 
 function describeChars(chars: BLECharacteristicWithUuid[]): string {
@@ -413,6 +528,32 @@ export async function connectPM5(): Promise<PM5Connection> {
   let metersEpochBase  = 0
   let lastRawElapsed   = 0
   let lastRawMeters    = 0
+  let endedSticky      = false
+  let strokes: PM5StrokeRecord[] = []
+  let splits:  PM5SplitRecord[]  = []
+  // Stroke characteristic 0x0035 resets its elapsed/distance fields at each
+  // interval boundary. We store records with those raw per-interval values
+  // (not workout-cumulative) — Logbook's per-interval pace graph relies on
+  // detecting the t-reset to group strokes into intervals, matching ErgData's
+  // upload format. We track which interval each stroke belongs to via a
+  // counter bumped on each detected reset.
+  let strokeIntervalIndex = 0
+  let lastStrokeRawElapsed = 0
+  // Dedup state — PM5 can fire 0x0035 multiple times per physical stroke
+  // (e.g. at drive-end and again at recovery-end), and the raw SPM computed
+  // from counts would be 2x actual. Track the monotonic strokeCount field
+  // (bytes 18-19) and fall back to a minimum time delta when that byte isn't
+  // populated on a given firmware. Both trackers reset at interval boundaries
+  // so the first real stroke of a new interval always passes.
+  let lastPushedStrokeCount = -1
+  let lastPushedRawElapsed  = -1
+  // Splits 0x0037 carries an "elapsed at end-of-split" field that resets per
+  // interval the same way. We accumulate so each split record reports a
+  // monotonic workout-cumulative elapsed.
+  let splitEpochElapsed = 0
+  let splitEpochMeters  = 0
+  let lastSplitRawElapsed = 0
+  let lastSplitRawMeters  = 0
 
   try {
     const rowingService = await server.getPrimaryService(PM_ROWING_SERVICE)
@@ -443,6 +584,7 @@ export async function connectPM5(): Promise<PM5Connection> {
           workStartsCount = 1
         }
         prevWorkoutState = workoutState
+        if (END_STATES.has(workoutState)) endedSticky = true
 
         telemetry = {
           elapsedSeconds: elapsedEpochBase + rawElapsed,
@@ -451,16 +593,115 @@ export async function connectPM5(): Promise<PM5Connection> {
           workoutState,
           rowingState,
           strokeState,
+          isEnded: endedSticky,
         }
         emit()
       })
       await general.startNotifications?.()
     }
+
+    // Stroke data — best-effort. Each fire is one completed stroke; we keep
+    // them all so the upload payload mirrors what ErgData sends.
+    const stroke = await rowingService.getCharacteristic(ROW_STROKE_DATA_UUID).catch(() => null)
+    if (stroke) {
+      stroke.addEventListener?.('characteristicvaluechanged', (event: Event) => {
+        const v = (event.target as BLECharacteristic | null)?.value
+        if (!v) return
+        const rec = parseStrokeRecord(v)
+        if (!rec) return
+        // PM5 emits glitchy strokes around interval boundaries / workout-end
+        // transitions, and warm-up handle-taps before real rowing begins.
+        // Both produce nonsense derived metrics (3000 SPM, 12000 s/500m pace,
+        // etc.) that distort Logbook's pace-graph y-axis.
+        //
+        // Thresholds picked to reject noise while keeping real sprint strokes:
+        //   period   ≥ 0.7s  (≤ 86 SPM; ErgData's observed max was 81 SPM)
+        //   strokeDistance ≥ 2m  (real strokes are 4–12m; taps are <1m)
+        const period = rec.driveTimeSec + rec.recoveryTimeSec
+        if (period < 0.7 || rec.strokeDistanceMeters < 2) return
+        // The stroke characteristic's elapsed/distance fields reset per
+        // interval, same as General Status. Bank prior interval totals when
+        // a backward jump is detected, then store cumulative values.
+        // Detect interval boundary: the stroke char's elapsed resets to ~0
+        // at the start of each new interval. Bump the interval counter and
+        // clear the dedup trackers so the interval's first stroke isn't
+        // rejected as a "close-in-time" duplicate relative to the previous
+        // interval's last stroke.
+        if (lastStrokeRawElapsed - rec.elapsedSeconds > 1) {
+          strokeIntervalIndex++
+          lastPushedStrokeCount = -1
+          lastPushedRawElapsed  = -1
+        }
+        lastStrokeRawElapsed = rec.elapsedSeconds
+
+        // Dedupe duplicate fires of the same physical stroke. strokeCount is
+        // the authoritative signal when present (u16 at byte 18-19, monotonic
+        // across the workout); the time-delta guard is a safety net for
+        // firmwares that don't populate it. 0.3s is well below our 0.7s
+        // period floor, so real consecutive strokes always pass.
+        if (rec.strokeCount > 0 && rec.strokeCount === lastPushedStrokeCount) return
+        if (lastPushedRawElapsed >= 0 && rec.elapsedSeconds - lastPushedRawElapsed < 0.3) return
+        lastPushedStrokeCount = rec.strokeCount
+        lastPushedRawElapsed  = rec.elapsedSeconds
+
+        strokes.push({ ...rec, intervalIndex: strokeIntervalIndex })
+      })
+      await stroke.startNotifications?.()
+    }
+
+    // Split/interval data — fires once per split or interval boundary. The
+    // split-internal fields (splitTimeSec, splitDistanceMeters) are already
+    // per-segment, but the leading elapsed/distance fields are workout-
+    // cumulative-but-reset, so we apply the same epoch banking.
+    const split = await rowingService.getCharacteristic(ROW_SPLIT_DATA_UUID).catch(() => null)
+    if (split) {
+      split.addEventListener?.('characteristicvaluechanged', (event: Event) => {
+        const v = (event.target as BLECharacteristic | null)?.value
+        if (!v) return
+        const rec = parseSplitRecord(v)
+        if (!rec) return
+        if (lastSplitRawElapsed - rec.elapsedSeconds > 1) {
+          splitEpochElapsed += lastSplitRawElapsed
+        }
+        if (lastSplitRawMeters - rec.distanceMeters > 1) {
+          splitEpochMeters += lastSplitRawMeters
+        }
+        lastSplitRawElapsed = rec.elapsedSeconds
+        lastSplitRawMeters  = rec.distanceMeters
+        splits.push({
+          ...rec,
+          elapsedSeconds: splitEpochElapsed + rec.elapsedSeconds,
+          distanceMeters: splitEpochMeters  + rec.distanceMeters,
+        })
+      })
+      await split.startNotifications?.()
+    }
   } catch {
-    // Rowing service unavailable — telemetry accessors stay null.
+    // Rowing service unavailable — telemetry/stroke/split accessors stay empty.
   }
 
   await new Promise(r => setTimeout(r, 250))
+
+  const resetTelemetry = () => {
+    elapsedEpochBase = 0
+    metersEpochBase  = 0
+    lastRawElapsed   = 0
+    lastRawMeters    = 0
+    prevWorkoutState = null
+    workStartsCount  = 0
+    endedSticky      = false
+    telemetry        = null
+    strokes          = []
+    splits           = []
+    strokeIntervalIndex  = 0
+    lastStrokeRawElapsed = 0
+    lastPushedStrokeCount = -1
+    lastPushedRawElapsed  = -1
+    splitEpochElapsed    = 0
+    splitEpochMeters     = 0
+    lastSplitRawElapsed  = 0
+    lastSplitRawMeters   = 0
+  }
 
   return {
     device,
@@ -473,6 +714,9 @@ export async function connectPM5(): Promise<PM5Connection> {
       listeners.add(fn)
       return () => { listeners.delete(fn) }
     },
+    getStrokes: () => strokes.slice(),
+    getSplits:  () => splits.slice(),
+    resetTelemetry,
   }
 }
 
@@ -530,6 +774,10 @@ export async function sendWorkout(
 ): Promise<string> {
   const frames = encodeWorkout(workout, opts)
   const startResponseIdx = conn.responses.length
+
+  // Drop any accumulated state from a prior workout on this connection before
+  // the PM starts emitting notifications for the new one.
+  conn.resetTelemetry()
 
   for (let i = 0; i < frames.length; i++) {
     try {

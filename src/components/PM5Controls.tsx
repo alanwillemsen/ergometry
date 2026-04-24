@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Workout, WorkoutPrediction } from '../model/workouts'
 import type { PM5State, PM5Status } from '../lib/pm5State'
+import type { Concept2State } from '../lib/concept2State'
 import { RowingDisplay } from './RowingDisplay'
 
 export interface PM5ControlsProps {
   workout: Workout | null
   prediction: WorkoutPrediction | null
   pm5: PM5State
+  concept2: Concept2State
 }
 
-export function PM5Controls({ workout, prediction, pm5 }: PM5ControlsProps) {
+export function PM5Controls({ workout, prediction, pm5, concept2 }: PM5ControlsProps) {
   const [showDisplay, setShowDisplay] = useState(false)
 
   // Auto-open the rowing display once an upload completes. We only fire on
@@ -57,14 +59,34 @@ export function PM5Controls({ workout, prediction, pm5 }: PM5ControlsProps) {
                 Disconnect
               </button>
             </div>
-            <button
-              type="button"
-              className="pm5-primary-btn"
-              onClick={() => workout && pm5.send(workout, prediction?.perIntervalSplitsSeconds)}
-              disabled={!workout || pm5.status === 'uploading'}
-            >
-              {pm5.status === 'uploading' ? 'Uploading…' : 'Ready ✓'}
-            </button>
+            {pm5.hasUploaded ? (
+              <>
+                <button
+                  type="button"
+                  className="pm5-primary-btn"
+                  onClick={() => setShowDisplay(true)}
+                >
+                  Open display
+                </button>
+                <button
+                  type="button"
+                  className="pm5-link"
+                  onClick={() => workout && pm5.send(workout, prediction?.perIntervalSplitsSeconds)}
+                  disabled={!workout || pm5.status === 'uploading'}
+                >
+                  {pm5.status === 'uploading' ? 'Re-uploading…' : 'Re-upload workout'}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="pm5-primary-btn"
+                onClick={() => workout && pm5.send(workout, prediction?.perIntervalSplitsSeconds)}
+                disabled={!workout || pm5.status === 'uploading'}
+              >
+                {pm5.status === 'uploading' ? 'Uploading…' : 'Ready ✓'}
+              </button>
+            )}
           </div>
         )}
 
@@ -75,6 +97,7 @@ export function PM5Controls({ workout, prediction, pm5 }: PM5ControlsProps) {
           workout={workout}
           prediction={prediction}
           conn={pm5.conn}
+          concept2={concept2}
           onClose={() => setShowDisplay(false)}
         />
       )}

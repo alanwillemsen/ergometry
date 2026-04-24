@@ -35,12 +35,13 @@ export function saveState(state: Partial<PersistedState>): void {
 
 // Migrates legacy `{ count, workKind, workValue, restKind, restValue }` entries
 // (pre-intervals schema) into a flat list of single-rep EditableInterval
-// objects. Two further normalizations are applied:
+// objects. Normalizations applied:
 //   - Legacy `restKind: 'distance'` is converted to time rest (meters / 4 m/s,
 //     matching the old pm5.ts approximation) since the PM5 doesn't support
 //     rest-by-distance.
-//   - Legacy `restKind` is dropped; the current schema encodes "no rest" as
-//     an empty `restValue`.
+//   - Legacy `restKind` is dropped.
+//   - Empty `restValue` (old "no rest" encoding) becomes "0:00", matching the
+//     current UI where the rest input always shows m:ss.
 export function migrateIntervals(raw: unknown): unknown[] {
   if (!Array.isArray(raw)) return []
   const out: unknown[] = []
@@ -61,9 +62,12 @@ export function migrateIntervals(raw: unknown): unknown[] {
       const s = seconds - m * 60
       rest.restValue = `${m}:${s.toString().padStart(2, '0')}`
     } else if (rest.restKind === 'none') {
-      rest.restValue = ''
+      rest.restValue = '0:00'
     }
     delete rest.restKind
+    if (typeof rest.restValue !== 'string' || rest.restValue.trim() === '') {
+      rest.restValue = '0:00'
+    }
     for (let i = 0; i < count; i++) out.push({ ...rest })
   }
   return out

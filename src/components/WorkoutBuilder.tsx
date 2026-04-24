@@ -23,9 +23,9 @@ import { parseTime, formatSplit, formatDuration } from '../lib/time'
 
 export type RepKind = 'distance' | 'duration'
 
-// Rest is encoded implicitly: empty restValue means no rest; any non-empty
-// value is parsed as a duration (m:ss). The PM5 doesn't support distance-based
-// rest, so there's no explicit kind to choose.
+// restValue is always m:ss — "0:00" means no rest. The input defaults to
+// "0:00" and snaps back to that on blur if cleared. The PM5 doesn't support
+// distance-based rest, so there's no explicit kind to choose.
 export interface EditableInterval {
   id?: string
   workKind: RepKind
@@ -55,7 +55,7 @@ export function ensureIntervalIds(intervals: EditableInterval[]): EditableInterv
 }
 
 export function emptyInterval(): EditableInterval {
-  return { id: newIntervalId(), workKind: 'distance', workValue: '2000', restValue: '' }
+  return { id: newIntervalId(), workKind: 'distance', workValue: '2000', restValue: '0:00' }
 }
 
 function parseValue(kind: RepKind, raw: string): number {
@@ -71,7 +71,7 @@ export function workoutToEditableIntervals(workout: Workout): EditableInterval[]
     const workKind: RepKind = iv.work.kind
     const workValue =
       iv.work.kind === 'distance' ? String(iv.work.meters) : formatDuration(iv.work.seconds)
-    const restValue = iv.rest.kind === 'duration' ? formatDuration(iv.rest.seconds) : ''
+    const restValue = iv.rest.kind === 'duration' ? formatDuration(iv.rest.seconds) : '0:00'
     const e: EditableInterval = { id: newIntervalId(), workKind, workValue, restValue }
     if (iv.band) e.band = iv.band
     if (typeof iv.lockedWbalPercent === 'number') e.lockedWbalPercent = iv.lockedWbalPercent
@@ -94,8 +94,8 @@ export function buildWorkoutFromIntervals(name: string, intervals: EditableInter
       rest = { kind: 'none' }
     } else {
       const restVal = parseTime(restRaw)
-      if (!isFinite(restVal) || restVal <= 0) return null
-      rest = { kind: 'duration', seconds: restVal }
+      if (!isFinite(restVal) || restVal < 0) return null
+      rest = restVal === 0 ? { kind: 'none' } : { kind: 'duration', seconds: restVal }
     }
     const iv: WorkoutInterval = { work, rest }
     if (s.band) iv.band = s.band
@@ -145,9 +145,9 @@ export function WorkoutBuilder({ fit, name, intervals, onChange, readOnly = fals
       const raw = s.restValue.trim()
       if (raw === '') return false
       const v = parseTime(raw)
-      return !isFinite(v) || v <= 0
+      return !isFinite(v) || v < 0
     })
-    if (hasBadRest) return 'Invalid rest duration — enter m:ss or leave blank for no rest.'
+    if (hasBadRest) return 'Invalid rest duration — enter m:ss (use 0:00 for no rest).'
     return 'Fix the inputs above to see a prediction.'
   }, [workout, intervals])
   const prediction = useMemo(() => {
@@ -456,39 +456,46 @@ function SortableIntervalCard({
       <div className="seg-row">
         <label className="seg-work">
           <span>Work</span>
-          <div className="inline">
-            <input
-              type="text"
-              value={iv.workValue}
-              onChange={(e) => setInt(i, { workValue: e.target.value })}
-              placeholder={iv.workKind === 'distance' ? 'meters' : 'm:ss'}
-              disabled={readOnly}
-            />
-            <select
-              value={iv.workKind}
-              onChange={(e) =>
-                setInt(i, {
-                  workKind: e.target.value as RepKind,
-                  workValue: e.target.value === 'distance' ? '2000' : '5:00',
-                })
-              }
-              disabled={readOnly}
-            >
-              <option value="distance">meters</option>
-              <option value="duration">time</option>
-            </select>
-          </div>
-        </label>
-        <label className="seg-rest">
-          <span>Rest</span>
           <input
             type="text"
-            value={iv.restValue}
-            onChange={(e) => setInt(i, { restValue: e.target.value })}
-            placeholder="m:ss (blank = none)"
+            value={iv.workValue}
+            onChange={(e) => setInt(i, { workValue: e.target.value })}
+            placeholder={iv.workKind === 'distance' ? 'meters' : 'm:ss'}
             disabled={readOnly}
           />
+          <select
+            value={iv.workKind}
+            onChange={(e) =>
+              setInt(i, {
+                workKind: e.target.value as RepKind,
+                workValue: e.target.value === 'distance' ? '2000' : '5:00',
+              })
+            }
+            disabled={readOnly}
+          >
+            <option value="distance">meters</option>
+            <option value="duration">time</option>
+          </select>
         </label>
+        {(() => {
+          const restNum = parseTime(iv.restValue)
+          const restIsZero = isFinite(restNum) && restNum === 0
+          return (
+            <label className={`seg-rest${restIsZero ? ' is-zero' : ''}`}>
+              <span>Rest</span>
+              <input
+                type="text"
+                value={iv.restValue}
+                onChange={(e) => setInt(i, { restValue: e.target.value })}
+                onBlur={(e) => {
+                  if (e.target.value.trim() === '') setInt(i, { restValue: '0:00' })
+                }}
+                placeholder="m:ss"
+                disabled={readOnly}
+              />
+            </label>
+          )
+        })()}
       </div>
       {(() => {
         const lockPct = iv.lockedWbalPercent

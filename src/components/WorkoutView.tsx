@@ -10,6 +10,7 @@ import {
 import { PM5Controls } from './PM5Controls'
 import { predictWorkout } from '../model/wprime'
 import type { PM5State } from '../lib/pm5State'
+import type { Concept2State } from '../lib/concept2State'
 
 export type WorkoutViewMode = 'create' | 'edit' | 'view-saved' | 'view-preset'
 type SubTab = 'builder' | 'pm5'
@@ -18,6 +19,7 @@ export interface WorkoutViewProps {
   mode: WorkoutViewMode
   fit: FittedProfile | null
   pm5: PM5State
+  concept2: Concept2State
   initialName?: string
   initialIntervals?: EditableInterval[]
   onSave?: (name: string, intervals: EditableInterval[]) => void
@@ -41,6 +43,7 @@ export function WorkoutView({
   mode,
   fit,
   pm5,
+  concept2,
   initialName,
   initialIntervals,
   onSave,
@@ -181,7 +184,12 @@ export function WorkoutView({
 
       {subTab === 'pm5' && (
         <div className="view-panel">
-          <PM5Controls workout={workout} prediction={prediction} pm5={pm5} />
+          <PM5Controls
+            workout={workout}
+            prediction={prediction}
+            pm5={pm5}
+            concept2={concept2}
+          />
           {!workout && (
             <p className="error">Fix the workout before uploading.</p>
           )}
