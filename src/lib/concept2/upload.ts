@@ -89,7 +89,7 @@ function strokeToPayload(s: PM5StrokeRecord): Concept2StrokeRecord {
     d:   Math.max(0, Math.round(s.distanceMeters)),
     p:   Math.max(0, paceTenths),
     spm: Math.max(0, spm),
-    hr:  0,
+    hr:  Math.max(0, Math.round(s.heartRate)),
   }
 }
 

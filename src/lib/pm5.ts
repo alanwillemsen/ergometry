@@ -13,14 +13,18 @@ const PM_ROWING_SERVICE  = 'ce060030-43e5-11e4-916c-0800200c9a66'
 //     fired every ~500 ms. We derive the current interval index from state
 //     transitions here; 0x0037 (Split/Interval Data) only fires at boundaries
 //     and is not useful for continuous "interval X of Y" tracking.
+//   0x0032 Additional Status 1 — fires every ~500 ms alongside 0x0031. Carries
+//     heart rate from any HRM the PM has paired (BLE or ANT+); the PM proxies
+//     it on this characteristic so we don't need our own strap connection.
 //   0x0035 Stroke Data — fires at the end of every stroke (~30/min at race
 //     pace). Provides the per-stroke timeline that drives the Logbook pace
 //     graph for ErgData-style detailed uploads.
 //   0x0037 Split/Interval Data — fires once per split or interval boundary.
 //     Provides per-interval distance/time/SPM for the Logbook intervals table.
-const ROW_GENERAL_STATUS_UUID = 'ce060031-43e5-11e4-916c-0800200c9a66'
-const ROW_STROKE_DATA_UUID    = 'ce060035-43e5-11e4-916c-0800200c9a66'
-const ROW_SPLIT_DATA_UUID     = 'ce060037-43e5-11e4-916c-0800200c9a66'
+const ROW_GENERAL_STATUS_UUID    = 'ce060031-43e5-11e4-916c-0800200c9a66'
+const ROW_ADDITIONAL_STATUS1_UUID = 'ce060032-43e5-11e4-916c-0800200c9a66'
+const ROW_STROKE_DATA_UUID       = 'ce060035-43e5-11e4-916c-0800200c9a66'
+const ROW_SPLIT_DATA_UUID        = 'ce060037-43e5-11e4-916c-0800200c9a66'
 
 // ── CSAFE frame constants ─────────────────────────────────────────────────────
 // Bytes in 0xF0..0xF3 are reserved as frame delimiters; any occurrence inside
@@ -309,6 +313,9 @@ export interface PM5StrokeRecord {
   strokeDistanceMeters: number
   workPerStrokeJoules: number
   strokeCount: number
+  // Latest HR sample seen on 0x0032 at the moment this stroke fired. 0 means
+  // no HRM was paired (or the PM5 reported its sentinel "invalid" code).
+  heartRate: number
 }
 
 // One split or interval boundary as reported by 0x0037 Split/Interval Data.
@@ -325,10 +332,11 @@ export interface PM5SplitRecord {
   splitNumber: number
 }
 
-// Parses just the raw per-interval fields. intervalIndex is assigned by the
-// caller based on boundary-reset detection, since a single packet can't know
-// which interval it belongs to.
-type ParsedStroke = Omit<PM5StrokeRecord, 'intervalIndex'>
+// Parses just the raw per-stroke fields. intervalIndex and heartRate are
+// stamped by the caller — intervalIndex from boundary-reset detection,
+// heartRate from the latest cached value seen on 0x0032 — neither is
+// available within a single 0x0035 packet.
+type ParsedStroke = Omit<PM5StrokeRecord, 'intervalIndex' | 'heartRate'>
 
 function parseStrokeRecord(v: DataView): ParsedStroke | null {
   // Spec says 20 bytes; tolerate slightly shorter frames as long as we have
@@ -511,12 +519,23 @@ export async function connectPM5(): Promise<PM5Connection> {
     for (const fn of listeners) fn(telemetry)
   }
 
-  // Client-side interval tracking. 0x0038 only fires at interval *end*, so
-  // its own interval-number field is stale during a rep. We instead count
-  // rest→work transitions observed on 0x0031: each entry into a work state
-  // from a non-work state is a new interval's work phase starting.
+  // Client-side interval tracking. We combine two signals:
+  //   - rest→work transitions on 0x0031 General Status: bumps live during
+  //     the workout, so the display advances the moment a new work phase
+  //     begins. But this misses zero-rest interval boundaries, where the
+  //     PM5 can stay in a work state across the boundary without ever
+  //     emitting a rest sub-state — leaving the counter stalled.
+  //   - splitNumber from 0x0037 Split/Interval Data: fires once at every
+  //     interval boundary regardless of rest, and carries the 0-based
+  //     index of the just-ended interval. We use it as an authoritative
+  //     floor on the current interval index; once split N has ended we
+  //     know we're in interval N+1 (0-indexed), no matter what 0x0031
+  //     reports.
   let prevWorkoutState: number | null = null
   let workStartsCount = 0
+  let lastSeenSplitNumber = -1
+  const computeIntervalIndex = (): number =>
+    Math.max(0, workStartsCount - 1, lastSeenSplitNumber + 1)
 
   // In variable-interval workouts the PM5's General Status elapsed time /
   // distance resets per interval. To report cumulative workout totals we
@@ -554,6 +573,11 @@ export async function connectPM5(): Promise<PM5Connection> {
   let splitEpochMeters  = 0
   let lastSplitRawElapsed = 0
   let lastSplitRawMeters  = 0
+  // Latest HR sample from 0x0032 Additional Status 1 (byte 5). The PM proxies
+  // its paired HRM here. We stamp this onto each stroke as it lands so the
+  // upload's per-stroke `hr` field is populated; 0 = no HRM (PM5 sentinel
+  // 0xFF or characteristic never fired).
+  let lastHeartRate = 0
 
   try {
     const rowingService = await server.getPrimaryService(PM_ROWING_SERVICE)
@@ -589,7 +613,7 @@ export async function connectPM5(): Promise<PM5Connection> {
         telemetry = {
           elapsedSeconds: elapsedEpochBase + rawElapsed,
           elapsedMeters:  metersEpochBase  + rawMeters,
-          intervalIndex: Math.max(0, workStartsCount - 1),
+          intervalIndex: computeIntervalIndex(),
           workoutState,
           rowingState,
           strokeState,
@@ -644,9 +668,29 @@ export async function connectPM5(): Promise<PM5Connection> {
         lastPushedStrokeCount = rec.strokeCount
         lastPushedRawElapsed  = rec.elapsedSeconds
 
-        strokes.push({ ...rec, intervalIndex: strokeIntervalIndex })
+        strokes.push({
+          ...rec,
+          intervalIndex: strokeIntervalIndex,
+          heartRate: lastHeartRate,
+        })
       })
       await stroke.startNotifications?.()
+    }
+
+    // Additional Status 1 (0x0032). Byte 5 is the PM-proxied heart rate in
+    // BPM; 0xFF means "no HRM paired or no recent reading," in which case we
+    // leave the cache at 0 so per-stroke uploads don't claim a fake HR.
+    // Best-effort — if the characteristic isn't exposed, strokes upload with
+    // hr=0 (matching the prior behavior) instead of failing the connection.
+    const additional1 = await rowingService.getCharacteristic(ROW_ADDITIONAL_STATUS1_UUID).catch(() => null)
+    if (additional1) {
+      additional1.addEventListener?.('characteristicvaluechanged', (event: Event) => {
+        const v = (event.target as BLECharacteristic | null)?.value
+        if (!v || v.byteLength < 6) return
+        const hr = v.getUint8(5)
+        lastHeartRate = hr === 0xFF ? 0 : hr
+      })
+      await additional1.startNotifications?.()
     }
 
     // Split/interval data — fires once per split or interval boundary. The
@@ -673,6 +717,16 @@ export async function connectPM5(): Promise<PM5Connection> {
           elapsedSeconds: splitEpochElapsed + rec.elapsedSeconds,
           distanceMeters: splitEpochMeters  + rec.distanceMeters,
         })
+        // Advance the authoritative floor on current interval index. Crucial
+        // for back-to-back zero-rest intervals where 0x0031 stays in a work
+        // state across the boundary and workStartsCount stalls.
+        if (rec.splitNumber > lastSeenSplitNumber) {
+          lastSeenSplitNumber = rec.splitNumber
+          if (telemetry) {
+            telemetry = { ...telemetry, intervalIndex: computeIntervalIndex() }
+            emit()
+          }
+        }
       })
       await split.startNotifications?.()
     }
@@ -689,6 +743,7 @@ export async function connectPM5(): Promise<PM5Connection> {
     lastRawMeters    = 0
     prevWorkoutState = null
     workStartsCount  = 0
+    lastSeenSplitNumber = -1
     endedSticky      = false
     telemetry        = null
     strokes          = []
@@ -701,6 +756,7 @@ export async function connectPM5(): Promise<PM5Connection> {
     splitEpochMeters     = 0
     lastSplitRawElapsed  = 0
     lastSplitRawMeters   = 0
+    lastHeartRate        = 0
   }
 
   return {
