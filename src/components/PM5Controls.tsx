@@ -14,9 +14,21 @@ export interface PM5ControlsProps {
 export function PM5Controls({ workout, prediction, pm5, concept2 }: PM5ControlsProps) {
   const [showDisplay, setShowDisplay] = useState(false)
 
+  // Open the display AND request fullscreen synchronously inside the same
+  // user-gesture handler. Android Chrome only honors requestFullscreen during
+  // an active user activation, which is gone by the time the child's mount
+  // effect runs — so we request here on documentElement, and RowingDisplay's
+  // own effect re-targets its root once it's mounted.
+  const openDisplay = () => {
+    document.documentElement.requestFullscreen?.().catch(() => {})
+    setShowDisplay(true)
+  }
+
   // Auto-open the rowing display once an upload completes. We only fire on
   // the uploading→done transition, so navigating into the PM5 tab while
   // status is already 'done' from a prior upload doesn't re-launch it.
+  // No user gesture is in scope here, so fullscreen won't auto-engage —
+  // the user can tap "⛶ Fullscreen" in the display to enter it.
   const prevStatus = useRef<PM5Status | null>(null)
   useEffect(() => {
     if (prevStatus.current === 'uploading' && pm5.status === 'done') {
@@ -64,7 +76,7 @@ export function PM5Controls({ workout, prediction, pm5, concept2 }: PM5ControlsP
                 <button
                   type="button"
                   className="pm5-primary-btn"
-                  onClick={() => setShowDisplay(true)}
+                  onClick={openDisplay}
                 >
                   Open display
                 </button>

@@ -19,6 +19,7 @@ interface OrientationLock {
 }
 interface WakeLockSentinel {
   release(): Promise<void>
+  addEventListener?(event: 'release', cb: () => void): void
 }
 interface WakeLockApi {
   request(type: 'screen'): Promise<WakeLockSentinel>
@@ -79,28 +80,37 @@ export function RowingDisplay({ workout, prediction, conn, concept2, onClose }: 
     orientation?.lock?.('landscape').catch(() => {})
   }
 
-  // Keep the screen awake. The OS/browser may drop the lock when the tab
-  // becomes hidden (e.g., user switches apps), so we re-acquire on visibility.
+  // Keep the screen awake. The OS/browser drops the lock for several reasons
+  // (tab hidden, fullscreen exit on some Android browsers, focus loss); we
+  // listen for the sentinel's own 'release' event so our cache doesn't go
+  // stale, and re-acquire on every signal that the user is back on the page.
   useEffect(() => {
     const nav = navigator as Navigator & { wakeLock?: WakeLockApi }
     if (!nav.wakeLock) return
     let sentinel: WakeLockSentinel | null = null
     let cancelled = false
     const acquire = async () => {
+      if (sentinel || cancelled) return
+      if (document.visibilityState !== 'visible') return
       try {
         const s = await nav.wakeLock!.request('screen')
         if (cancelled) { s.release().catch(() => {}); return }
+        s.addEventListener?.('release', () => {
+          if (sentinel === s) sentinel = null
+        })
         sentinel = s
       } catch { /* user denied or API unavailable */ }
     }
     acquire()
-    const onVis = () => {
-      if (document.visibilityState === 'visible' && !sentinel) acquire()
-    }
-    document.addEventListener('visibilitychange', onVis)
+    const onSignal = () => { acquire() }
+    document.addEventListener('visibilitychange', onSignal)
+    document.addEventListener('fullscreenchange', onSignal)
+    window.addEventListener('focus', onSignal)
     return () => {
       cancelled = true
-      document.removeEventListener('visibilitychange', onVis)
+      document.removeEventListener('visibilitychange', onSignal)
+      document.removeEventListener('fullscreenchange', onSignal)
+      window.removeEventListener('focus', onSignal)
       sentinel?.release().catch(() => {})
     }
   }, [])

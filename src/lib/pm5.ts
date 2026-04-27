@@ -319,8 +319,9 @@ export interface PM5StrokeRecord {
 }
 
 // One split or interval boundary as reported by 0x0037 Split/Interval Data.
-// "splitNumber" is the 0-based index of the split that just ended, per the
-// PM5 spec; for variable-interval workouts this is the interval index.
+// "splitNumber" is the count of split/interval boundaries crossed so far —
+// equivalently, the 0-based index of the now-active interval (i.e. it has
+// already incremented by the time the boundary's notification fires).
 export interface PM5SplitRecord {
   elapsedSeconds: number
   distanceMeters: number
@@ -526,16 +527,17 @@ export async function connectPM5(): Promise<PM5Connection> {
   //     PM5 can stay in a work state across the boundary without ever
   //     emitting a rest sub-state — leaving the counter stalled.
   //   - splitNumber from 0x0037 Split/Interval Data: fires once at every
-  //     interval boundary regardless of rest, and carries the 0-based
-  //     index of the just-ended interval. We use it as an authoritative
-  //     floor on the current interval index; once split N has ended we
-  //     know we're in interval N+1 (0-indexed), no matter what 0x0031
-  //     reports.
+  //     interval boundary regardless of rest. Despite the spec field name
+  //     suggesting an index, the value is the *count* of boundaries crossed
+  //     so far, which equals the 0-based index of the now-active interval —
+  //     so we use it directly (no +1) as a floor. Without this, zero-rest
+  //     boundaries would stall the counter, since 0x0031 can stay in a work
+  //     state across the boundary; with a +1 it overshoots by one.
   let prevWorkoutState: number | null = null
   let workStartsCount = 0
-  let lastSeenSplitNumber = -1
+  let lastSeenSplitNumber = 0
   const computeIntervalIndex = (): number =>
-    Math.max(0, workStartsCount - 1, lastSeenSplitNumber + 1)
+    Math.max(0, workStartsCount - 1, lastSeenSplitNumber)
 
   // In variable-interval workouts the PM5's General Status elapsed time /
   // distance resets per interval. To report cumulative workout totals we
@@ -743,7 +745,7 @@ export async function connectPM5(): Promise<PM5Connection> {
     lastRawMeters    = 0
     prevWorkoutState = null
     workStartsCount  = 0
-    lastSeenSplitNumber = -1
+    lastSeenSplitNumber = 0
     endedSticky      = false
     telemetry        = null
     strokes          = []
