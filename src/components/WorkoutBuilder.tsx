@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   DndContext,
   KeyboardSensor,
@@ -16,7 +16,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { FittedProfile } from '../model/pacing'
-import { computeIntervalBounds, predictWorkout } from '../model/wprime'
+import { predictWorkout } from '../model/wprime'
 import type { Band, Workout, WorkoutInterval } from '../model/workouts'
 import { BANDS } from '../model/workouts'
 import { parseTime, formatSplit, formatDuration } from '../lib/time'
@@ -55,7 +55,7 @@ export function ensureIntervalIds(intervals: EditableInterval[]): EditableInterv
 }
 
 export function emptyInterval(): EditableInterval {
-  return { id: newIntervalId(), workKind: 'distance', workValue: '2000', restValue: '0:00' }
+  return { id: newIntervalId(), workKind: 'duration', workValue: '5:00', restValue: '0:00' }
 }
 
 function parseValue(kind: RepKind, raw: string): number {
@@ -116,7 +116,6 @@ export interface WorkoutBuilderProps {
 }
 
 export function WorkoutBuilder({ fit, name, intervals, onChange, readOnly = false }: WorkoutBuilderProps) {
-  const [openLockIdx, setOpenLockIdx] = useState<number | null>(null)
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
@@ -202,6 +201,30 @@ export function WorkoutBuilder({ fit, name, intervals, onChange, readOnly = fals
       }),
     })
   }
+  // Toggle the "Anaerobic" pill. On activation, default the lock to the
+  // midpoint of the slider's range: left endpoint = end-of-interval W'bal
+  // when this interval runs at AT (P=CP), right endpoint = end-of-interval
+  // W'bal under Max pacing (the holistic solver). Without a fit, fall back
+  // to 50%.
+  const setAnaerobic = (i: number, on: boolean) => {
+    if (!on) {
+      setLock(i, undefined)
+      return
+    }
+    let defaultPct = 50
+    if (workout && fit) {
+      const ends = computeAnaerobicEndpoints(workout, i, fit)
+      if (ends) defaultPct = Math.round(((ends.atEndPct + ends.maxEndPct) / 2) * 10) / 10
+    }
+    onChange({
+      intervals: intervals.map((s, idx) => {
+        if (idx !== i) return s
+        const next = { ...s, lockedWbalPercent: defaultPct }
+        delete next.band
+        return next
+      }),
+    })
+  }
   const addInt = () => {
     const template = intervals.length > 0
       ? { ...intervals[intervals.length - 1], id: newIntervalId() }
@@ -278,13 +301,12 @@ export function WorkoutBuilder({ fit, name, intervals, onChange, readOnly = fals
                 setInt={setInt}
                 setBand={setBand}
                 setLock={setLock}
+                setAnaerobic={setAnaerobic}
                 onDuplicate={() => duplicateInt(i)}
                 onRemove={() => removeInt(i)}
                 prediction={prediction}
                 workout={workout}
                 fit={fit}
-                openLockIdx={openLockIdx}
-                setOpenLockIdx={setOpenLockIdx}
               />
             )
           })}
@@ -351,13 +373,12 @@ interface SortableIntervalCardProps {
   setInt: (i: number, patch: Partial<EditableInterval>) => void
   setBand: (i: number, band: Band | undefined) => void
   setLock: (i: number, pct: number | undefined) => void
+  setAnaerobic: (i: number, on: boolean) => void
   onDuplicate: () => void
   onRemove: () => void
   prediction: ReturnType<typeof predictWorkout> | null
   workout: Workout | null
   fit: FittedProfile | null
-  openLockIdx: number | null
-  setOpenLockIdx: (v: number | null) => void
 }
 
 function SortableIntervalCard({
@@ -372,13 +393,12 @@ function SortableIntervalCard({
   setInt,
   setBand,
   setLock,
+  setAnaerobic,
   onDuplicate,
   onRemove,
   prediction,
   workout,
   fit,
-  openLockIdx,
-  setOpenLockIdx,
 }: SortableIntervalCardProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id,
@@ -498,30 +518,14 @@ function SortableIntervalCard({
         })()}
       </div>
       {(() => {
-        const lockPct = iv.lockedWbalPercent
-        const hasLock = typeof lockPct === 'number'
-        // At lock = 100% the solver pins P to CP, which is the AT band.
-        // Surface that equivalence visually so the slider maps smoothly
-        // onto the band pills.
-        const atEquivalent = hasLock && lockPct >= 99.5
-        // Max pill's fill = "effort level" = (100 − lockPct)%. No lock +
-        // no band → fully filled (equivalent to current is-active look).
-        const maxFillPct = hasLock
-          ? Math.max(0, Math.min(100, 100 - lockPct))
-          : iv.band === undefined
-            ? 100
-            : 0
-        const maxPillClass =
-          maxFillPct <= 0
-            ? 'band-pill'
-            : maxFillPct >= 100
-              ? 'band-pill is-active'
-              : 'band-pill has-fill'
+        const hasLock = typeof iv.lockedWbalPercent === 'number'
+        const anaerobicActive = !iv.band && hasLock
+        const maxActive = !iv.band && !hasLock
         return (
           <div className="seg-bands" role="group" aria-label="Training band">
             <span className="seg-bands-label">Band</span>
             {BANDS.map((b) => {
-              const active = iv.band === b || (b === 'AT' && atEquivalent)
+              const active = iv.band === b
               return (
                 <button
                   key={b}
@@ -537,8 +541,16 @@ function SortableIntervalCard({
             })}
             <button
               type="button"
-              className={maxPillClass}
-              style={maxFillPct > 0 && maxFillPct < 100 ? { ['--max-fill' as string]: `${maxFillPct}%` } : undefined}
+              className={`band-pill${anaerobicActive ? ' is-active' : ''}`}
+              onClick={() => setAnaerobic(i, !anaerobicActive)}
+              title="Anaerobic — between AT and max (use the slider to set intensity)"
+              disabled={readOnly}
+            >
+              Anaerobic
+            </button>
+            <button
+              type="button"
+              className={`band-pill${maxActive ? ' is-active' : ''}`}
               onClick={() => setBand(i, undefined)}
               title="Max — hardest feasible pace for this set"
               disabled={readOnly}
@@ -548,6 +560,20 @@ function SortableIntervalCard({
           </div>
         )
       })()}
+      {!readOnly && !iv.band && typeof iv.lockedWbalPercent === 'number' && workout && fit && (
+        <AnaerobicSlider
+          workout={workout}
+          intervalIdx={i}
+          fit={fit}
+          currentPct={
+            prediction?.perIntervalWbalPercent[i] != null
+              ? Math.max(0, Math.min(100, prediction.perIntervalWbalPercent[i]))
+              : iv.lockedWbalPercent
+          }
+          lockedValue={iv.lockedWbalPercent}
+          onChange={(pctVal) => setLock(i, pctVal)}
+        />
+      )}
       {prediction && prediction.perIntervalSplitsSeconds[i] != null && (() => {
         const split = prediction.perIntervalSplitsSeconds[i]
         const workVal = parseValue(iv.workKind, iv.workValue)
@@ -558,7 +584,6 @@ function SortableIntervalCard({
             : `interval ≈ ${((500 * workVal) / split).toFixed(0)}m`
         const pctRaw = prediction.perIntervalWbalPercent[i]
         const pct = pctRaw != null ? Math.max(0, Math.min(100, pctRaw)) : null
-        const locked = typeof iv.lockedWbalPercent === 'number'
         const banded = !!iv.band
         const bandSuffix = banded ? ` @ ${iv.band}` : ''
         return (
@@ -568,30 +593,8 @@ function SortableIntervalCard({
                 target <span className="seg-split-hi">{formatSplit(split)}<span className="seg-split-unit">/500m</span></span>
                 {bandSuffix} · {repDetail}
               </div>
-              {pct != null && (
-                <BatteryButton
-                  pct={pct}
-                  locked={locked}
-                  banded={banded || readOnly}
-                  hideLockBadge={readOnly}
-                  onClick={
-                    readOnly || banded ? undefined : () => setOpenLockIdx(openLockIdx === i ? null : i)
-                  }
-                />
-              )}
+              {pct != null && <BatteryIndicator pct={pct} />}
             </div>
-            {!readOnly && !banded && openLockIdx === i && workout && fit && (
-              <BatteryLockPanel
-                workout={workout}
-                intervalIdx={i}
-                fit={fit}
-                currentPct={pct ?? 0}
-                locked={locked}
-                lockedValue={iv.lockedWbalPercent}
-                onChange={(pctVal) => setLock(i, pctVal)}
-                onClose={() => setOpenLockIdx(null)}
-              />
-            )}
           </div>
         )
       })()}
@@ -599,60 +602,16 @@ function SortableIntervalCard({
   )
 }
 
-function BatteryButton({
-  pct,
-  locked,
-  banded,
-  hideLockBadge,
-  onClick,
-}: {
-  pct: number
-  locked: boolean
-  banded?: boolean
-  hideLockBadge?: boolean
-  onClick?: () => void
-}) {
-  const title = banded
-    ? `${pct.toFixed(0)}% anaerobic battery at end of interval (set by band)`
-    : locked
-      ? `Locked at ${pct.toFixed(0)}% anaerobic battery — click to adjust`
-      : `${pct.toFixed(0)}% anaerobic battery remaining — click to lock`
-  const clickable = !!onClick && !banded
+function BatteryIndicator({ pct }: { pct: number }) {
+  const title = `${pct.toFixed(0)}% anaerobic battery at end of interval`
   return (
-    <button
-      type="button"
-      className={`battery-indicator battery-button${locked ? ' is-locked' : ''}${banded ? ' is-banded' : ''}`}
-      title={title}
-      onClick={clickable ? onClick : undefined}
-      aria-label={title}
-      disabled={!clickable}
-    >
+    <div className="battery-indicator" title={title} aria-label={title}>
       <div className="battery-bar">
         <div className="battery-fill" style={{ width: `${pct}%` }} />
         <div className="battery-text">{pct.toFixed(0)}%</div>
       </div>
       <div className="battery-terminal" />
-      {!hideLockBadge && locked && (
-        <svg className="battery-lock-badge" aria-hidden="true"
-          width="11" height="13" viewBox="0 0 10 12"
-          fill="none" stroke="currentColor" strokeWidth="1.25"
-          strokeLinecap="round" strokeLinejoin="round"
-        >
-          <rect x="1.5" y="5" width="7" height="6" rx="1" />
-          <path d="M3.25 5V3.5a1.75 1.75 0 0 1 3.5 0V5" />
-        </svg>
-      )}
-      {!hideLockBadge && clickable && !locked && (
-        <svg className="battery-lock-badge battery-unlock-badge" aria-hidden="true"
-          width="13" height="13" viewBox="0 0 10 12"
-          fill="none" stroke="currentColor" strokeWidth="1.25"
-          strokeLinecap="round" strokeLinejoin="round"
-        >
-          <rect x="1.5" y="5" width="7" height="6" rx="1" />
-          <path d="M6.5 5V3a2 2 0 0 1 4 0V5" />
-        </svg>
-      )}
-    </button>
+    </div>
   )
 }
 
@@ -667,132 +626,123 @@ function bandDescription(b: Band): string {
   }
 }
 
-function BatteryLockPanel({
+// Compute the W'bal % at end of this interval under the two Anaerobic-slider
+// endpoint scenarios: this interval at AT (P=CP, left end) vs this interval
+// in Max mode (holistic solver, right end). Other intervals keep their
+// existing band/lock settings so the slider's endpoints exactly mirror what
+// would happen if the user clicked the AT or Max pill for this interval.
+// Returns null if predictions are unavailable.
+function computeAnaerobicEndpoints(
+  workout: Workout,
+  intervalIdx: number,
+  fit: FittedProfile,
+): { atEndPct: number; maxEndPct: number } | null {
+  const probeWith = (override: { band?: Band }): Workout => ({
+    ...workout,
+    intervals: workout.intervals.map((iv, idx) =>
+      idx === intervalIdx
+        ? { work: iv.work, rest: iv.rest, ...(override.band ? { band: override.band } : {}) }
+        : iv,
+    ),
+  })
+  const predAt = predictWorkout(
+    probeWith({ band: 'AT' }),
+    fit.cpWatts, fit.wPrimeJoules, undefined, 0,
+    fit.decayK, fit.wPrimeMortonJoules, fit.kSeconds,
+  )
+  const predMax = predictWorkout(
+    probeWith({}),
+    fit.cpWatts, fit.wPrimeJoules, undefined, 0,
+    fit.decayK, fit.wPrimeMortonJoules, fit.kSeconds,
+  )
+  const atEndPct = predAt.perIntervalWbalPercent[intervalIdx]
+  const maxEndPct = predMax.perIntervalWbalPercent[intervalIdx]
+  if (atEndPct == null || maxEndPct == null) return null
+  return {
+    atEndPct: Math.max(0, Math.min(100, atEndPct)),
+    maxEndPct: Math.max(0, Math.min(100, maxEndPct)),
+  }
+}
+
+// Slider for the "Anaerobic" pill. Axis is intensity (0 = AT on the left,
+// 100 = Max on the right). Internally maps to a lockedWbalPercent that runs
+// between the AT-pill outcome (full battery, P=CP) and the Max-pill outcome
+// (the holistic solver's end W'bal for this interval). Picking either
+// endpoint yields the same split as clicking the corresponding pill.
+function AnaerobicSlider({
   workout,
   intervalIdx,
   fit,
   currentPct,
-  locked,
   lockedValue,
   onChange,
-  onClose,
 }: {
   workout: Workout
   intervalIdx: number
   fit: FittedProfile
   currentPct: number
-  locked: boolean
-  lockedValue: number | undefined
-  onChange: (pct: number | undefined) => void
-  onClose: () => void
+  lockedValue: number
+  onChange: (pct: number) => void
 }) {
-  const ref = useRef<HTMLDivElement>(null)
+  const ends = useMemo(
+    () => computeAnaerobicEndpoints(workout, intervalIdx, fit),
+    [workout, intervalIdx, fit],
+  )
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    const onPointer = (e: PointerEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    document.addEventListener('pointerdown', onPointer)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      document.removeEventListener('pointerdown', onPointer)
-    }
-  }, [onClose])
-
-  const bounds = useMemo(() => {
-    // Strip this interval's own lock when computing bounds so the slider range
-    // reflects what's achievable independently of the current setting.
-    const probe: Workout = {
-      ...workout,
-      intervals: workout.intervals.map((iv, idx) =>
-        idx === intervalIdx && iv.lockedWbalPercent !== undefined
-          ? { work: iv.work, rest: iv.rest }
-          : iv,
-      ),
-    }
-    return computeIntervalBounds(
-      probe,
-      intervalIdx,
-      fit.cpWatts,
-      fit.wPrimeJoules,
-      undefined,
-      fit.decayK,
-      fit.wPrimeMortonJoules,
-      fit.kSeconds,
-    )
-  }, [workout, intervalIdx, fit])
-
-  // Slider uses 0.1 % steps so the steep region near P=CP is resolvable.
-  const min = Math.floor(bounds.minPct * 10) / 10
-  const max = Math.ceil(bounds.maxPct * 10) / 10
-  const drainMax = bounds.drainMaxPct
-  const recoveryMin = bounds.recoveryMinPct
-  // A physical "forbidden zone" exists where no constant pace reaches the
-  // target. Snap slider drags through it to the nearer endpoint so the slider
-  // only lands on values the solver can actually hit.
-  const hasGap = recoveryMin - drainMax > 1
-  const snap = (v: number): number => {
-    if (!hasGap) return v
-    if (v <= drainMax) return v
-    if (v >= recoveryMin) return v
-    // In the gap: jump to the closer edge. Tie → recoveryMin (so a drag from 0
-    // pops over to where splits start changing, matching user expectation).
-    return v - drainMax < recoveryMin - v ? drainMax : recoveryMin
+  if (!ends) {
+    // No prediction available (shouldn't happen given the render guard, but
+    // bail out gracefully rather than crash).
+    return null
   }
-  const sliderValue = locked && lockedValue !== undefined ? lockedValue : currentPct
-  const rounded = Math.round(sliderValue * 10) / 10
-  const clamped = Math.max(min, Math.min(max, rounded))
+
+  const atEnd = ends.atEndPct
+  const maxEnd = ends.maxEndPct
+  // AT end is the "easier" side → higher W'bal remaining. If the two ends
+  // collapse (e.g. very long aerobic-only interval where Max ≈ AT) the
+  // slider has no range; treat any value as the single endpoint.
+  const lo = Math.min(atEnd, maxEnd)
+  const hi = Math.max(atEnd, maxEnd)
+  const range = hi - lo
+
+  const lockFromIntensity = (it: number) => atEnd - (it / 100) * (atEnd - maxEnd)
+  const intensityFromLock = (lp: number) =>
+    range > 0 ? Math.max(0, Math.min(100, ((atEnd - lp) / (atEnd - maxEnd)) * 100)) : 0
+
+  const clampedLock = Math.max(lo, Math.min(hi, lockedValue))
+  const intensity = intensityFromLock(clampedLock)
+
+  const handle = (raw: number) => {
+    const lp = lockFromIntensity(raw)
+    onChange(Math.round(lp * 10) / 10)
+  }
 
   return (
-    <div className="lock-panel" ref={ref}>
-      <div className="lock-panel-row">
-        <label className="lock-slider-label">
-          <span>Lock anaerobic battery at end of this interval</span>
-          <input
-            type="range"
-            min={min}
-            max={max}
-            step={0.1}
-            value={clamped}
-            onChange={(e) => onChange(snap(Number(e.target.value)))}
-            onInput={(e) => onChange(snap(Number((e.target as HTMLInputElement).value)))}
-          />
-          <span className="lock-slider-value">
-            <strong>{clamped.toFixed(1)}%</strong>
-            <span className="lock-slider-range">
-              {hasGap
-                ? `range ${min.toFixed(1)}, ${recoveryMin.toFixed(1)}–${max.toFixed(1)}%`
-                : `range ${min.toFixed(1)}–${max.toFixed(1)}%`}
-            </span>
-          </span>
-        </label>
+    <div className="anaerobic-slider">
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={0.1}
+        value={intensity}
+        onChange={(e) => handle(Number(e.target.value))}
+        onInput={(e) => handle(Number((e.target as HTMLInputElement).value))}
+        aria-label="Anaerobic intensity from AT (left) to Max (right)"
+      />
+      <div className="anaerobic-slider-ticks" aria-hidden="true">
+        {Array.from({ length: 11 }).map((_, k) => (
+          <span key={k} />
+        ))}
       </div>
-      {locked && lockedValue !== undefined && Math.abs(lockedValue - currentPct) > 1 && (
+      <div className="anaerobic-slider-ends" aria-hidden="true">
+        <span>AT</span>
+        <span>Max</span>
+      </div>
+      {Math.abs(clampedLock - currentPct) > 1 && (
         <p className="lock-panel-warning">
           ⚠ target unreachable given earlier settings — actual will be{' '}
           {Math.round(currentPct)}%.
         </p>
       )}
-      <div className="lock-panel-actions">
-        {locked && (
-          <button
-            type="button"
-            className="link-button"
-            onClick={() => {
-              onChange(undefined)
-            }}
-          >
-            Unlock
-          </button>
-        )}
-        <button type="button" className="link-button" onClick={onClose}>
-          Close
-        </button>
-      </div>
     </div>
   )
 }

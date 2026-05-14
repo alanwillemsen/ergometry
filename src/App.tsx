@@ -6,6 +6,7 @@ import { TierInsight } from './components/TierInsight'
 import { WorkoutList } from './components/WorkoutList'
 import { type EditableInterval, workoutToEditableIntervals } from './components/WorkoutBuilder'
 import { WorkoutView } from './components/WorkoutView'
+import { NerdGuide } from './components/NerdGuide'
 import { usePM5 } from './lib/pm5State'
 import { useConcept2 } from './lib/concept2State'
 import { Concept2Link } from './components/Concept2Link'
@@ -28,6 +29,7 @@ type ViewState =
   | { kind: 'edit'; id: string }
   | { kind: 'view-saved'; id: string }
   | { kind: 'view-preset'; presetId: string }
+  | { kind: 'nerd' }
   | null
 
 const DEFAULTS = {
@@ -310,6 +312,9 @@ function App() {
 
   const renderView = () => {
     if (!view) return null
+    if (view.kind === 'nerd') {
+      return <NerdGuide onClose={() => setView(null)} />
+    }
     if (view.kind === 'edit' || view.kind === 'view-saved') {
       const w = savedWorkouts.find((sw) => sw.id === view.id)
       if (!w) return null
@@ -393,6 +398,16 @@ function App() {
         </ol>
         <p className="hint">
           Predictions use a critical-power model tuned from your profile. Your data stays in this browser.
+        </p>
+        <p className="hint">
+          <button
+            type="button"
+            className="link-button nerd-link"
+            onClick={() => setView({ kind: 'nerd' })}
+          >
+            Nerdsplanation →
+          </button>
+          <span className="nerd-link-hint"> the math &amp; physiology, paper-style.</span>
         </p>
       </details>
 
