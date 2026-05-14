@@ -679,17 +679,18 @@ export async function connectPM5(): Promise<PM5Connection> {
       await stroke.startNotifications?.()
     }
 
-    // Additional Status 1 (0x0032). Byte 5 is the PM-proxied heart rate in
-    // BPM; 0xFF means "no HRM paired or no recent reading," in which case we
-    // leave the cache at 0 so per-stroke uploads don't claim a fake HR.
-    // Best-effort — if the characteristic isn't exposed, strokes upload with
-    // hr=0 (matching the prior behavior) instead of failing the connection.
+    // Additional Status 1 (0x0032). Per the PM5 BLE spec, byte 5 is Stroke
+    // Rate (spm) and byte 6 is the PM-proxied heart rate in BPM; 0xFF means
+    // "no HRM paired or no recent reading," in which case we leave the cache
+    // at 0 so per-stroke uploads don't claim a fake HR. Best-effort — if the
+    // characteristic isn't exposed, strokes upload with hr=0 instead of
+    // failing the connection.
     const additional1 = await rowingService.getCharacteristic(ROW_ADDITIONAL_STATUS1_UUID).catch(() => null)
     if (additional1) {
       additional1.addEventListener?.('characteristicvaluechanged', (event: Event) => {
         const v = (event.target as BLECharacteristic | null)?.value
-        if (!v || v.byteLength < 6) return
-        const hr = v.getUint8(5)
+        if (!v || v.byteLength < 7) return
+        const hr = v.getUint8(6)
         lastHeartRate = hr === 0xFF ? 0 : hr
       })
       await additional1.startNotifications?.()
