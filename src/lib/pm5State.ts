@@ -1,6 +1,19 @@
 import { useCallback, useState } from 'react'
 import { connectPM5, sendWorkout, type PM5Connection } from './pm5'
+import { connectMockPM5, isMockConnection } from './mockPM5'
 import type { Workout } from '../model/workouts'
+
+// Dev/test escape hatch: drive a synthetic PM5 connection that walks through
+// the workout's intervals at the predicted pace. Enable with `?mockpm5=1`
+// (search) or `&mockpm5=1` inside the hash. Off by default; intentionally
+// unsigned/unauthenticated since this is local-only and side-effect-free.
+function isMockMode(): boolean {
+  if (typeof window === 'undefined' || !window.location) return false
+  const search = window.location.search ?? ''
+  if (new URLSearchParams(search).get('mockpm5') === '1') return true
+  const hash = window.location.hash ?? ''
+  return /(?:^|[?&#])mockpm5=1\b/.test(hash)
+}
 
 export type PM5Status = 'idle' | 'connecting' | 'ready' | 'uploading' | 'done' | 'error'
 
@@ -26,7 +39,8 @@ export function usePM5(): PM5State {
   const [conn, setConn] = useState<PM5Connection | null>(null)
 
   const connect = useCallback(async () => {
-    if (!('bluetooth' in navigator)) {
+    const mock = isMockMode()
+    if (!mock && !('bluetooth' in navigator)) {
       setError('Web Bluetooth not supported in this browser')
       setStatus('error')
       return
@@ -34,7 +48,7 @@ export function usePM5(): PM5State {
     setStatus('connecting')
     setError(null)
     try {
-      const c = await connectPM5()
+      const c = mock ? connectMockPM5() : await connectPM5()
       setConn(c)
       // Concept2 advertises devices as "PM5 <serial> <Row|Ski|Bike>". The
       // trailing erg-type tag is redundant in this app and causes the name to
@@ -76,7 +90,12 @@ export function usePM5(): PM5State {
     setStatus('uploading')
     setError(null)
     try {
-      await sendWorkout(conn, workout, { perIntervalPaceSeconds })
+      if (isMockConnection(conn)) {
+        // No BLE programming round-trip — just kick the synthetic clock.
+        conn.startMockWorkout(workout, perIntervalPaceSeconds)
+      } else {
+        await sendWorkout(conn, workout, { perIntervalPaceSeconds })
+      }
       setStatus('done')
       setHasUploaded(true)
       setTimeout(() => setStatus(s => s === 'done' ? 'ready' : s), 2000)

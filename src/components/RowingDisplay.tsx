@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PM5Connection, PM5Telemetry } from '../lib/pm5'
 import type { Workout, WorkoutPrediction } from '../model/workouts'
-import { formatSplit } from '../lib/time'
+import { formatSplit, formatDuration } from '../lib/time'
 import type { Concept2State } from '../lib/concept2State'
 
 export interface RowingDisplayProps {
@@ -124,10 +124,35 @@ export function RowingDisplay({ workout, prediction, conn, concept2, onClose }: 
     ? (prediction.perIntervalSplitsSeconds[intervalIdx + 1] ?? prediction.avgSplitSeconds)
     : null
 
+  // Coaching notes for the current interval, surfaced below the target as a
+  // small italic line. The PM5 monitor itself shows live stroke rate, so we
+  // don't duplicate it here.
+  const intervalNotes = workout.intervals[intervalIdx]?.notes ?? ''
+
   // Concept2 workout states 3/8/9 = INTERVAL_REST and its two work→rest
   // transitions. All three mean "not rowing the piece right now."
   const ws = telemetry?.workoutState
   const isResting = ws === 3 || ws === 8 || ws === 9
+
+  // Phase-aware "what's coming next" line: during work, surface this
+  // interval's rest duration so the rower can pace effort; during rest,
+  // surface the next interval's split since rest itself is the now.
+  const currentRest = workout.intervals[intervalIdx]?.rest
+  const currentRestSeconds =
+    currentRest?.kind === 'duration' ? currentRest.seconds : 0
+  const nextLine: { label: string; value: string } | null = (() => {
+    if (isResting) {
+      return nextSplit !== null
+        ? { label: 'next split', value: formatSplit(nextSplit) }
+        : null
+    }
+    if (currentRestSeconds > 0) {
+      return { label: 'next rest', value: formatDuration(currentRestSeconds) }
+    }
+    return nextSplit !== null
+      ? { label: 'next split', value: formatSplit(nextSplit) }
+      : null
+  })()
 
   const elapsed = telemetry?.elapsedSeconds ?? 0
   const isEnded = telemetry?.isEnded ?? false
@@ -201,9 +226,12 @@ export function RowingDisplay({ workout, prediction, conn, concept2, onClose }: 
                 {isResting ? 'REST' : formatSplit(targetSplit)}
               </div>
               {!isResting && <div className="rd-target-unit">/500m target</div>}
-              {nextSplit !== null && (
+              {!isResting && intervalNotes && (
+                <div className="rd-notes">{intervalNotes}</div>
+              )}
+              {nextLine && (
                 <div className="rd-target-next">
-                  next {formatSplit(nextSplit)}
+                  {nextLine.label} {nextLine.value}
                 </div>
               )}
             </>

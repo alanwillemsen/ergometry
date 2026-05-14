@@ -133,47 +133,6 @@ body { margin: 0; }
   border-bottom-color: var(--accent);
 }
 
-/* Shared workout banner */
-.shared-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  padding: 12px 16px;
-  background: var(--accent-bg);
-  border: 1px solid var(--accent-border);
-  border-radius: 8px;
-  font-size: 14px;
-  color: var(--text-h);
-}
-.shared-banner-actions {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
-}
-.shared-save-btn {
-  padding: 6px 12px;
-  background: var(--accent);
-  color: var(--accent-fg);
-  border: none;
-  border-radius: 6px;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-}
-.shared-save-btn:hover { filter: brightness(1.1); }
-.shared-dismiss-btn {
-  padding: 6px 12px;
-  background: transparent;
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 13px;
-  cursor: pointer;
-}
-.shared-dismiss-btn:hover { color: var(--text-h); }
-
 /* Share profile button (inside Profile panel) */
 .share-button {
   align-self: flex-start;
@@ -892,6 +851,31 @@ code {
 .seg-row > .seg-work { flex: 2 1 0; }
 .seg-rest.is-zero { opacity: 0.45; }
 .seg-rest.is-zero input { color: var(--text); font-weight: 400; }
+/* Notes input on its own row below Work/Rest. The label hint is enough,
+   no placeholder needed. */
+.seg-notes {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.seg-notes > span {
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+}
+.seg-notes input {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-bg);
+  color: var(--text-h);
+  font: 400 13px var(--sans);
+  flex: 1 1 0;
+  min-width: 0;
+  box-sizing: border-box;
+}
 .seg-row span { font-size: 12px; color: var(--text); white-space: nowrap; }
 .seg-row input[type='text'],
 .seg-row input[type='number'] {
@@ -1341,6 +1325,17 @@ code {
   margin-top: 1vh;
   letter-spacing: 0.03em;
   line-height: 0.9;
+}
+/* Coach notes for the current interval — readable from rowing distance, so
+   sized comparable to .rd-target-unit and rendered upright (italic at vh
+   sizes turns blurry on phones mounted at arm's length). Capped to ~one
+   viewport-width so very long notes wrap rather than blowing the layout out. */
+.rd-notes {
+  margin-top: 1.5vh;
+  font-size: 8vh;
+  color: #ddd;
+  max-width: 90vw;
+  line-height: 1.15;
 }
 .rd-interval {
   grid-column: 2;

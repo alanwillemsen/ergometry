@@ -18,7 +18,7 @@ import { CSS } from '@dnd-kit/utilities'
 import type { FittedProfile } from '../model/pacing'
 import { predictWorkout } from '../model/wprime'
 import type { Band, Workout, WorkoutInterval } from '../model/workouts'
-import { BANDS } from '../model/workouts'
+import { BANDS, extractSpmRange } from '../model/workouts'
 import { parseTime, formatSplit, formatDuration } from '../lib/time'
 
 export type RepKind = 'distance' | 'duration'
@@ -33,6 +33,9 @@ export interface EditableInterval {
   restValue: string
   lockedWbalPercent?: number
   band?: Band
+  // Free-form coaching note (e.g. "r22-24, neg split rep 1"). Rate target is
+  // auto-extracted from this string at display time.
+  notes?: string
 }
 
 let intervalIdCounter = 0
@@ -75,6 +78,7 @@ export function workoutToEditableIntervals(workout: Workout): EditableInterval[]
     const e: EditableInterval = { id: newIntervalId(), workKind, workValue, restValue }
     if (iv.band) e.band = iv.band
     if (typeof iv.lockedWbalPercent === 'number') e.lockedWbalPercent = iv.lockedWbalPercent
+    if (iv.notes) e.notes = iv.notes
     return e
   })
 }
@@ -100,6 +104,7 @@ export function buildWorkoutFromIntervals(name: string, intervals: EditableInter
     const iv: WorkoutInterval = { work, rest }
     if (s.band) iv.band = s.band
     else if (typeof s.lockedWbalPercent === 'number') iv.lockedWbalPercent = s.lockedWbalPercent
+    if (s.notes && s.notes.trim() !== '') iv.notes = s.notes.trim()
     built.push(iv)
   }
   return { id: 'custom', name: name || 'Custom workout', intervals: built }
@@ -517,6 +522,15 @@ function SortableIntervalCard({
           )
         })()}
       </div>
+      <label className="seg-notes">
+        <span>Notes</span>
+        <input
+          type="text"
+          value={iv.notes ?? ''}
+          onChange={(e) => setInt(i, { notes: e.target.value })}
+          disabled={readOnly}
+        />
+      </label>
       {(() => {
         const hasLock = typeof iv.lockedWbalPercent === 'number'
         const anaerobicActive = !iv.band && hasLock
@@ -586,12 +600,18 @@ function SortableIntervalCard({
         const pct = pctRaw != null ? Math.max(0, Math.min(100, pctRaw)) : null
         const banded = !!iv.band
         const bandSuffix = banded ? ` @ ${iv.band}` : ''
+        const rateParsed = extractSpmRange(iv.notes)
+        const rateLabel = rateParsed
+          ? rateParsed.min === rateParsed.max
+            ? ` · r${rateParsed.min}`
+            : ` · r${rateParsed.min}-${rateParsed.max}`
+          : ''
         return (
           <div className="seg-target">
             <div className="seg-target-row">
               <div>
                 target <span className="seg-split-hi">{formatSplit(split)}<span className="seg-split-unit">/500m</span></span>
-                {bandSuffix} · {repDetail}
+                {bandSuffix} · {repDetail}{rateLabel}
               </div>
               {pct != null && <BatteryIndicator pct={pct} />}
             </div>

@@ -26,6 +26,39 @@ export interface WorkoutInterval {
   // When set, pin this interval's work-power to the band's target (derived
   // from the fitted profile). Band overrides lockedWbalPercent.
   band?: Band
+  // Optional free-form coaching note for this interval (e.g. "r22-24, neg
+  // split rep 1"). Display-only — predictor and PM5 programming ignore it.
+  // The rowing display scans this string for a stroke-rate pattern via
+  // extractSpmRange so the live SPM colour-codes against the target.
+  notes?: string
+}
+
+// Pull a stroke-rate target out of a free-form notes string. Recognised
+// shapes, in priority order:
+//   1.  r22  /  r22-24  /  rate 22  /  rate 22-24   (explicit prefix)
+//   2.  22 spm  /  22-24 spm                        (explicit suffix)
+//   3.  22-24                                       (bare hyphenated range)
+// Numbers outside the plausible SPM band [14, 50] are rejected so things
+// like "5x1k" don't masquerade as a rate. Returns null when no pattern
+// matches.
+export function extractSpmRange(notes: string | undefined): { min: number; max: number } | null {
+  const text = notes ?? ''
+  if (!text) return null
+  const tryMatch = (re: RegExp): { min: number; max: number } | null => {
+    const m = text.match(re)
+    if (!m) return null
+    const lo = Number(m[1])
+    const hi = m[2] ? Number(m[2]) : lo
+    if (!isFinite(lo) || !isFinite(hi)) return null
+    if (lo < 14 || lo > 50 || hi < 14 || hi > 50) return null
+    if (lo > hi) return null
+    return { min: lo, max: hi }
+  }
+  return (
+    tryMatch(/\br(?:ate)?\s*(\d{1,2})(?:\s*[-–]\s*(\d{1,2}))?\b/i) ??
+    tryMatch(/\b(\d{1,2})(?:\s*[-–]\s*(\d{1,2}))?\s*spm\b/i) ??
+    tryMatch(/\b(\d{1,2})\s*[-–]\s*(\d{1,2})\b/)
+  )
 }
 
 export interface Workout {

@@ -45,6 +45,23 @@ function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2)
 }
 
+// Structural fingerprint of (name, intervals) for share-link dedup. Strips
+// runtime-only fields (id) and trims whitespace so cosmetic differences don't
+// produce false misses; otherwise it's a strict canonical JSON encoding so
+// reopening an identical link is a no-op while sender-edited reshares get a
+// fresh save.
+function fingerprintWorkout(name: string, intervals: EditableInterval[]): string {
+  const canon = intervals.map((iv) => ({
+    workKind: iv.workKind,
+    workValue: iv.workValue.trim(),
+    restValue: iv.restValue.trim(),
+    lockedWbalPercent: iv.lockedWbalPercent,
+    band: iv.band,
+    notes: iv.notes?.trim() || undefined,
+  }))
+  return JSON.stringify({ name: name.trim(), intervals: canon })
+}
+
 // True for first-time / incognito visitors — also true after the default-only
 // state has been auto-persisted on mount, so refreshes don't promote a user
 // who never touched anything to the Workouts tab.
@@ -171,17 +188,35 @@ function App() {
     return () => window.removeEventListener('popstate', handlePop)
   }, [])
   const [profileShareStatus, setProfileShareStatus] = useState<'' | 'copied' | 'error'>('')
-  const [sharedWorkout, setSharedWorkout] = useState<{ name: string; intervals: EditableInterval[] } | null>(() => {
-    const w = readHashWorkout()
-    return w ? { name: w.name, intervals: w.intervals as EditableInterval[] } : null
-  })
   const [helpOpen, setHelpOpen] = useState(() => isFirstTimeLike(loadState()))
 
-  // Clear workout hash from URL on load (profile hashes are cleared on share)
+  // Shared workouts land via `#wkt.v1.…` hash. Strip the hash first (so the
+  // share URL doesn't re-trigger on reload), then auto-save the workout
+  // unless a structurally identical one already exists. Either way we open
+  // it as a saved workout — the user can Delete from there if unwanted.
+  // Ref-guarded so React StrictMode's double-invoke doesn't dupe in dev.
+  const sharedHandledRef = useRef(false)
   useEffect(() => {
-    if (sharedWorkout) {
-      history.replaceState(null, '', location.pathname)
+    if (sharedHandledRef.current) return
+    sharedHandledRef.current = true
+    const w = readHashWorkout()
+    if (!w) return
+    history.replaceState(null, '', location.pathname)
+    const incoming = w.intervals as EditableInterval[]
+    const fp = fingerprintWorkout(w.name, incoming)
+    const existing = savedWorkouts.find((sw) => {
+      const ivs = readWorkoutIntervals(sw) as EditableInterval[]
+      return fingerprintWorkout(sw.name, ivs) === fp
+    })
+    const id = existing ? existing.id : generateId()
+    if (!existing) {
+      setSavedWorkouts((prev) => [{ id, name: w.name, intervals: incoming }, ...prev])
     }
+    setView({ kind: 'view-saved', id })
+    setActiveTab('workouts')
+    // savedWorkouts is read once on mount — re-running this on changes would
+    // re-open the share on every edit. Refs preserve our one-shot intent.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Persist state
@@ -302,13 +337,6 @@ function App() {
     setView(null)
   }
 
-  // Shared workout received via link
-  const handleSaveSharedWorkout = () => {
-    if (!sharedWorkout) return
-    setSavedWorkouts((prev) => [{ id: generateId(), name: sharedWorkout.name, intervals: sharedWorkout.intervals }, ...prev])
-    setSharedWorkout(null)
-    setActiveTab('workouts')
-  }
 
   const renderView = () => {
     if (!view) return null
@@ -411,21 +439,6 @@ function App() {
         </p>
       </details>
 
-      {sharedWorkout && (
-        <div className="shared-banner">
-          <span>
-            <strong>Shared workout:</strong> {sharedWorkout.name}
-          </span>
-          <div className="shared-banner-actions">
-            <button className="shared-save-btn" onClick={handleSaveSharedWorkout}>
-              Save workout
-            </button>
-            <button className="shared-dismiss-btn" onClick={() => setSharedWorkout(null)}>
-              Dismiss
-            </button>
-          </div>
-        </div>
-      )}
 
       <nav className="tab-bar" role="tablist">
         <button

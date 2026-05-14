@@ -266,6 +266,9 @@ export interface PM5Telemetry {
   workoutState: number
   rowingState: number
   strokeState: number
+  // Latest stroke rate (strokes/min) from 0x0032 Additional Status 1 byte 5.
+  // 0 when no recent stroke / pre-workout.
+  strokeRateSpm: number
   // True once the PM has entered a terminal workout state at least once.
   // Sticky — subsequent non-terminal states do not clear it, so a button
   // that appears at end-of-workout doesn't blink away on the next poll.
@@ -575,11 +578,15 @@ export async function connectPM5(): Promise<PM5Connection> {
   let splitEpochMeters  = 0
   let lastSplitRawElapsed = 0
   let lastSplitRawMeters  = 0
-  // Latest HR sample from 0x0032 Additional Status 1 (byte 5). The PM proxies
+  // Latest HR sample from 0x0032 Additional Status 1 (byte 6). The PM proxies
   // its paired HRM here. We stamp this onto each stroke as it lands so the
   // upload's per-stroke `hr` field is populated; 0 = no HRM (PM5 sentinel
   // 0xFF or characteristic never fired).
   let lastHeartRate = 0
+  // Latest stroke rate (spm) from 0x0032 Additional Status 1 byte 5.
+  // Surfaced via telemetry for the live rowing display; 0 means no recent
+  // stroke or pre-workout.
+  let lastStrokeRateSpm = 0
 
   try {
     const rowingService = await server.getPrimaryService(PM_ROWING_SERVICE)
@@ -619,6 +626,7 @@ export async function connectPM5(): Promise<PM5Connection> {
           workoutState,
           rowingState,
           strokeState,
+          strokeRateSpm: lastStrokeRateSpm,
           isEnded: endedSticky,
         }
         emit()
@@ -690,8 +698,16 @@ export async function connectPM5(): Promise<PM5Connection> {
       additional1.addEventListener?.('characteristicvaluechanged', (event: Event) => {
         const v = (event.target as BLECharacteristic | null)?.value
         if (!v || v.byteLength < 7) return
+        lastStrokeRateSpm = v.getUint8(5)
         const hr = v.getUint8(6)
         lastHeartRate = hr === 0xFF ? 0 : hr
+        // Refresh telemetry so the rowing display sees the new SPM without
+        // waiting for the next 0x0031 fire (~1 s). General Status drives
+        // most fields; if it hasn't fired yet, leave telemetry untouched.
+        if (telemetry) {
+          telemetry = { ...telemetry, strokeRateSpm: lastStrokeRateSpm }
+          emit()
+        }
       })
       await additional1.startNotifications?.()
     }
@@ -760,6 +776,7 @@ export async function connectPM5(): Promise<PM5Connection> {
     lastSplitRawElapsed  = 0
     lastSplitRawMeters   = 0
     lastHeartRate        = 0
+    lastStrokeRateSpm    = 0
   }
 
   return {
