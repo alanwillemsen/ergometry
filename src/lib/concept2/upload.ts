@@ -149,12 +149,17 @@ export function buildUploadPayload({
   // (e.g. a planned 20+20+30s workout was showing as 1:27 instead of 1:10).
   // Sum-of-splits exactly captures the structured workout and matches what
   // ErgData uploads.
+  //
+  // Top-level time/distance are *work only* — rest is carried separately on
+  // each interval's rest_time/rest_distance. Including rest here causes the
+  // Logbook to dilute the displayed average pace (time ÷ distance) with the
+  // rest periods.
   const haveSplits = !!splits && splits.length > 0
   const totalTimeSec = haveSplits
-    ? splits!.reduce((acc, s) => acc + s.splitTimeSec + s.splitRestTimeSec, 0)
+    ? splits!.reduce((acc, s) => acc + s.splitTimeSec, 0)
     : telemetry.elapsedSeconds
   const totalDistanceM = haveSplits
-    ? splits!.reduce((acc, s) => acc + s.splitDistanceMeters + s.splitRestDistanceMeters, 0)
+    ? splits!.reduce((acc, s) => acc + s.splitDistanceMeters, 0)
     : telemetry.elapsedMeters
 
   const timeTenths = Math.max(0, Math.round(totalTimeSec * 10))
