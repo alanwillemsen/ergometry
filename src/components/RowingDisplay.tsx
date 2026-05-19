@@ -10,6 +10,10 @@ export interface RowingDisplayProps {
   conn: PM5Connection
   concept2: Concept2State
   onClose: () => void
+  // Re-program the PM5 with the same workout. Surfaced as the "Restart"
+  // button on the DONE screen so the rower doesn't have to back out to
+  // PM5Controls to start over.
+  onRestart: () => void
 }
 
 // Screen Orientation + Wake Lock APIs aren't in this project's lib target.
@@ -34,9 +38,14 @@ function intervalPlannedSeconds(iv: Workout['intervals'][number], split: number)
   return work + rest
 }
 
-export function RowingDisplay({ workout, prediction, conn, concept2, onClose }: RowingDisplayProps) {
+export function RowingDisplay({ workout, prediction, conn, concept2, onClose, onRestart }: RowingDisplayProps) {
   const [telemetry, setTelemetry] = useState<PM5Telemetry | null>(() => conn.getTelemetry())
   const [isFullscreen, setIsFullscreen] = useState(false)
+  // User-initiated early end. Decouples our "show DONE" decision from the
+  // PM5's workoutState so a rower whose plans changed can upload partial
+  // splits without rowing the rest. Reset when telemetry resets (a new send
+  // to the PM5 zeroes elapsed) and on explicit Restart.
+  const [endedEarly, setEndedEarly] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const onCloseRef = useRef(onClose)
   useEffect(() => { onCloseRef.current = onClose })
@@ -155,7 +164,15 @@ export function RowingDisplay({ workout, prediction, conn, concept2, onClose }: 
   })()
 
   const elapsed = telemetry?.elapsedSeconds ?? 0
-  const isEnded = telemetry?.isEnded ?? false
+  const pmEnded = telemetry?.isEnded ?? false
+  const isEnded = pmEnded || endedEarly
+
+  // When the PM5 starts a fresh workout, elapsed drops back near zero and
+  // isEnded clears. Use that signal to drop our local early-end flag so a
+  // subsequent run isn't stuck in the DONE view.
+  useEffect(() => {
+    if (endedEarly && !pmEnded && elapsed < 1) setEndedEarly(false)
+  }, [endedEarly, pmEnded, elapsed])
 
   // Capture wall-clock elapsed at each interval transition so within-interval
   // progress is measured against the current interval, not the plan's sum.
@@ -195,6 +212,21 @@ export function RowingDisplay({ workout, prediction, conn, concept2, onClose }: 
     })
   }
 
+  const onEndEarly = () => {
+    // Soft confirm — partial uploads can be deleted from the Logbook, so this
+    // isn't catastrophically irreversible, but we still gate it to prevent a
+    // fat-finger mid-piece.
+    const ok = window.confirm(
+      'Stop the workout here and upload what you\'ve done so far?',
+    )
+    if (ok) setEndedEarly(true)
+  }
+
+  const onRestartClick = () => {
+    setEndedEarly(false)
+    onRestart()
+  }
+
   return (
     <div ref={rootRef} className="rowing-display">
       <button
@@ -213,6 +245,15 @@ export function RowingDisplay({ workout, prediction, conn, concept2, onClose }: 
           onClick={enterFullscreen}
         >
           ⛶ Fullscreen
+        </button>
+      )}
+      {!isEnded && (telemetry?.elapsedSeconds ?? 0) > 0 && (
+        <button
+          type="button"
+          className="rd-end-early"
+          onClick={onEndEarly}
+        >
+          End early
         </button>
       )}
       <div className="rd-title">{workout.name}</div>
@@ -264,6 +305,13 @@ export function RowingDisplay({ workout, prediction, conn, concept2, onClose }: 
               {concept2.error && concept2.status === 'error' && (
                 <p className="rd-finish-msg is-error">{concept2.error}</p>
               )}
+              <button
+                type="button"
+                className="rd-restart"
+                onClick={onRestartClick}
+              >
+                Restart workout
+              </button>
             </div>
           ) : (
             <div className="rd-progress-bar">

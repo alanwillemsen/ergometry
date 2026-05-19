@@ -1267,6 +1267,22 @@ code {
   z-index: 2;
 }
 .rd-enter-fs:hover { background: rgba(255, 255, 255, 0.15); color: #fff; }
+.rd-end-early {
+  position: absolute;
+  bottom: 10px;
+  left: 12px;
+  background: transparent;
+  color: #666;
+  border: none;
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 6px 10px;
+  cursor: pointer;
+  z-index: 2;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.rd-end-early:hover { color: #aaa; }
 .rd-title {
   position: absolute;
   top: 10px;
@@ -1420,6 +1436,18 @@ code {
   max-width: 80vw;
 }
 .rd-finish-msg.is-error { color: #e08585; }
+.rd-restart {
+  background: transparent;
+  color: #aaa;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 1vh;
+  font-family: var(--mono);
+  font-size: 2.4vh;
+  padding: 1.2vh 3vh;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+}
+.rd-restart:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
 
 .concept2-link {
   display: flex;

@@ -34,6 +34,7 @@ export interface Concept2State {
     strokes?: PM5StrokeRecord[]
     splits?: PM5SplitRecord[]
   }) => Promise<void>
+  resetUploadState: () => void
 }
 
 export function useConcept2(): Concept2State {
@@ -105,5 +106,14 @@ export function useConcept2(): Concept2State {
     }
   }, [user])
 
-  return { status, error, user, connect, disconnect, upload }
+  // Clear post-upload state so a fresh workout can be uploaded again. Called
+  // when the user kicks off a new send to the PM5. Only flips terminal states
+  // back to 'connected'; mid-flight statuses ('uploading', 'connecting') and
+  // pre-auth states ('disconnected', 'unconfigured') are left alone.
+  const resetUploadState = useCallback(() => {
+    setError(null)
+    setStatus((s) => (s === 'upload-done' || s === 'error' ? 'connected' : s))
+  }, [])
+
+  return { status, error, user, connect, disconnect, upload, resetUploadState }
 }

@@ -40,6 +40,15 @@ export function PM5Controls({ workout, prediction, pm5, concept2 }: PM5ControlsP
   const connected =
     pm5.status === 'ready' || pm5.status === 'uploading' || pm5.status === 'done'
 
+  // Wipe any prior Logbook upload state before starting a new send — otherwise
+  // a second workout in the same session inherits the first run's
+  // 'upload-done' status and the upload button stays disabled.
+  const startWorkout = () => {
+    if (!workout) return
+    concept2.resetUploadState()
+    pm5.send(workout, prediction?.perIntervalSplitsSeconds)
+  }
+
   return (
     <>
       <div className="pm5-panel">
@@ -83,7 +92,7 @@ export function PM5Controls({ workout, prediction, pm5, concept2 }: PM5ControlsP
                 <button
                   type="button"
                   className="pm5-link"
-                  onClick={() => workout && pm5.send(workout, prediction?.perIntervalSplitsSeconds)}
+                  onClick={startWorkout}
                   disabled={!workout || pm5.status === 'uploading'}
                 >
                   {pm5.status === 'uploading' ? 'Re-uploading…' : 'Re-upload workout'}
@@ -93,7 +102,7 @@ export function PM5Controls({ workout, prediction, pm5, concept2 }: PM5ControlsP
               <button
                 type="button"
                 className="pm5-primary-btn"
-                onClick={() => workout && pm5.send(workout, prediction?.perIntervalSplitsSeconds)}
+                onClick={startWorkout}
                 disabled={!workout || pm5.status === 'uploading'}
               >
                 {pm5.status === 'uploading' ? 'Uploading…' : 'Ready ✓'}
@@ -111,6 +120,7 @@ export function PM5Controls({ workout, prediction, pm5, concept2 }: PM5ControlsP
           conn={pm5.conn}
           concept2={concept2}
           onClose={() => setShowDisplay(false)}
+          onRestart={startWorkout}
         />
       )}
     </>
